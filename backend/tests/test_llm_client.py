@@ -70,6 +70,7 @@ def test_llm_client_uses_600_second_timeout(monkeypatch):
     assert client.timeout_seconds == 600.0
     assert captured["timeout"] == 600.0
     assert captured["base_url"] == "https://example.test/v1"
+    assert captured["default_headers"] == {"User-Agent": "StaffDeck/0.1"}
     assert client.extra_body == {
         "thinking": {"type": "disabled"},
         "do_sample": False,

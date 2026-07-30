@@ -42,6 +42,7 @@ JSON_REPAIR_ATTEMPTS = 3
 EMPTY_RESPONSE_RETRIES = 2
 EMPTY_RESPONSE_MESSAGE = "Model returned an empty response"
 DEFAULT_MODEL_API_TIMEOUT_SECONDS = 600.0
+OPENAI_COMPATIBLE_USER_AGENT = "StaffDeck/0.1"
 DEFAULT_INPUT_TOKEN_BUDGET = 32_000
 TURN_STAGE_MESSAGE_MARKER = "_agent_turn_message"
 # Ceiling for the reasoning-model length-truncation retry escalation. A model
@@ -90,6 +91,7 @@ class LLMClient:
                 api_key=api_key,
                 base_url=self.base_url,
                 timeout=self.timeout_seconds,
+                default_headers={"User-Agent": OPENAI_COMPATIBLE_USER_AGENT},
             )
             self.driver = ChatCompletionsDriver(self.client)
         elif protocol is ModelApiProtocol.ANTHROPIC_MESSAGES:
