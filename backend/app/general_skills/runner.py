@@ -19,7 +19,7 @@ from tempfile import mkdtemp
 from typing import Any
 
 from app import paths
-from app.db.models import GeneralSkill, ModelConfig
+from app.db.models import GeneralSkill, ModelConfig, Tool
 from app.general_skills.runtime_env import (
     GeneralSkillRuntimeError,
     ensure_runtime_python,
@@ -49,6 +49,8 @@ GENERAL_SKILL_MAX_TOKENS = 8192
 GENERAL_SKILL_MAX_ATTEMPTS = 10
 TraceSink = Callable[[dict[str, Any]], None]
 GENERAL_SKILL_SELECTION_OUTPUT = {
+    "use_tool": "boolean",
+    "tool_call": {"name": "string", "arguments": "object"},
     "use_general_skill": "boolean",
     "selected_slug": "string?",
     "use_knowledge": "boolean",
@@ -81,7 +83,9 @@ class GeneralSkillSelector:
         model_config: ModelConfig,
         conversation_context: dict[str, object] | None = None,
         memory_context: list[dict[str, object]] | None = None,
+        available_tools: list[Tool] | None = None,
     ) -> GeneralSkillSelection:
+        enabled_tools = [tool for tool in (available_tools or []) if tool.enabled]
         payload = stage_payload(
             phase="Router / General Skill Selector",
             user_message=query,
@@ -89,6 +93,15 @@ class GeneralSkillSelector:
             memory_context=memory_context,
             instructions=SELECTOR_PROMPT.read_text(encoding="utf-8"),
             stage_data={
+                "available_tools": [
+                    {
+                        "name": tool.name,
+                        "display_name": tool.display_name,
+                        "description": tool.description,
+                        "input_schema": tool.input_schema,
+                    }
+                    for tool in enabled_tools
+                ],
                 "general_skills": [
                     {
                         "slug": skill.slug,
@@ -108,6 +121,13 @@ class GeneralSkillSelector:
                 unified_system_prompt(), payload
             )
         decision = GeneralSkillSelection.model_validate(raw)
+        tool_names = {tool.name for tool in enabled_tools}
+        if (
+            not decision.use_tool
+            or decision.tool_call is None
+            or decision.tool_call.name not in tool_names
+        ):
+            decision = decision.model_copy(update={"use_tool": False, "tool_call": None})
         slugs = {skill.slug for skill in general_skills if skill.status == "published"}
         if decision.use_general_skill and decision.selected_slug in slugs:
             return decision

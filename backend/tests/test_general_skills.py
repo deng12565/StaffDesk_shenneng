@@ -31,6 +31,7 @@ from app.db.models import (
     ModelConfig,
     Skill,
     Tenant,
+    Tool,
     User,
 )
 from app.general_skills.runner import GeneralSkillRunner, GeneralSkillSelector
@@ -46,7 +47,7 @@ from app.llm import LLMClient, LLMError
 from app.security.auth import hash_password
 from app.security.encryption import encrypt_secret
 from app.session.session_schema import ChatTurnRequest, RouterDecision, StepAgentResult
-from app.tools.tool_schema import ToolCall
+from app.tools.tool_schema import ToolCall, ToolResult
 
 
 WEATHER_SKILL_MD = """# 中国城市天气查询工具
@@ -116,6 +117,82 @@ def test_capability_selector_still_checks_knowledge_without_general_skills(monke
     assert decision.use_general_skill is False
     assert decision.use_knowledge is True
     assert decision.knowledge_query == "员工报销的审批要求"
+
+
+def test_capability_selector_allows_employee_tool_with_human_location(monkeypatch) -> None:
+    received: dict[str, object] = {}
+    monkeypatch.setattr(LLMClient, "__init__", lambda self, model_config: None)
+
+    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        received.update(payload)
+        return {
+            "use_tool": True,
+            "tool_call": {
+                "name": "openet.get_point_forecast",
+                "arguments": {
+                    "location": "北京",
+                    "mete_vars": ["t2m@C", "tp", "ws10m", "tcc"],
+                    "horizon_hours": 48,
+                },
+            },
+            "use_general_skill": False,
+            "use_knowledge": False,
+            "confidence": 0.97,
+        }
+
+    monkeypatch.setattr(LLMClient, "generate_json", fake_generate_json)
+    tool = Tool(
+        tenant_id="tenant_demo",
+        name="openet.get_point_forecast",
+        display_name="查询单点天气预报",
+        description="按地点名称查询天气预报，不要向用户询问经纬度。",
+        tool_type="mcp",
+        method="POST",
+        url="mcp://openet/get_point_forecast",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "location": {"type": "string"},
+                "mete_vars": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["mete_vars"],
+        },
+    )
+
+    decision = GeneralSkillSelector().decide(
+        "帮我查询北京明天的天气",
+        [],
+        SimpleNamespace(),
+        available_tools=[tool],
+    )
+
+    assert received["available_tools"][0]["name"] == tool.name
+    assert decision.use_tool is True
+    assert decision.tool_call is not None
+    assert decision.tool_call.arguments["location"] == "北京"
+    assert "lon" not in decision.tool_call.arguments
+    assert "lat" not in decision.tool_call.arguments
+
+
+def test_capability_selector_rejects_tool_not_visible_to_employee(monkeypatch) -> None:
+    monkeypatch.setattr(LLMClient, "__init__", lambda self, model_config: None)
+    monkeypatch.setattr(
+        LLMClient,
+        "generate_json",
+        lambda self, system_prompt, payload: {
+            "use_tool": True,
+            "tool_call": {"name": "invented.weather", "arguments": {}},
+            "use_general_skill": False,
+            "use_knowledge": False,
+        },
+    )
+
+    decision = GeneralSkillSelector().decide(
+        "查询天气", [], SimpleNamespace(), available_tools=[]
+    )
+
+    assert decision.use_tool is False
+    assert decision.tool_call is None
 
 
 def test_capability_knowledge_is_merged_into_general_skill_result() -> None:
@@ -1112,6 +1189,7 @@ def test_general_skill_and_active_scene_run_in_the_same_turn(monkeypatch) -> Non
             model_config,
             conversation_context=None,
             memory_context=None,
+            available_tools=None,
         ):
             selector_calls.append(query)
             return GeneralSkillSelection(
@@ -1230,6 +1308,7 @@ def test_scene_tool_call_to_general_skill_records_expandable_trace(monkeypatch) 
         model_config,
         conversation_context=None,
         memory_context=None,
+        available_tools=None,
     ):
         received_contexts.append(conversation_context)
         return GeneralSkillSelection(
@@ -1362,6 +1441,7 @@ def test_scene_tool_call_to_general_skill_backfills_returned_trace(monkeypatch) 
         model_config,
         conversation_context=None,
         memory_context=None,
+        available_tools=None,
     ):
         return GeneralSkillSelection(
             use_general_skill=True,
@@ -1479,6 +1559,7 @@ def test_scene_tool_call_rejects_mismatched_general_skill(monkeypatch) -> None:
         model_config,
         conversation_context=None,
         memory_context=None,
+        available_tools=None,
     ):
         return GeneralSkillSelection(
             use_general_skill=False,
@@ -1577,6 +1658,7 @@ def test_scene_step_agent_does_not_expose_irrelevant_general_skill(monkeypatch) 
         model_config,
         conversation_context=None,
         memory_context=None,
+        available_tools=None,
     ):
         return GeneralSkillSelection(
             use_general_skill=False,
@@ -1762,6 +1844,209 @@ def test_chat_turn_treats_unmatched_scene_as_chat_when_general_skill_not_selecte
         assert "general_skill_selected" not in event_types
         assert "tool_call_started" not in event_types
         assert "step_agent_result_created" not in event_types
+
+
+def test_chat_turn_calls_visible_employee_tool_after_scene_router_defers(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_init(self, model_config):  # noqa: ANN001
+        return None
+
+    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        prompt_text = _system_and_stage_instructions(system_prompt, payload)
+        if "企业技能路由器" in prompt_text:
+            calls.append("router")
+            return {
+                "decision": "answer_only",
+                "confidence": 0.95,
+                "user_intent": "查询北京明天天气",
+                "reason": "不属于现有企业流程。",
+            }
+        if "通用技能选择器" in prompt_text:
+            calls.append("selector")
+            assert payload["available_tools"][0]["name"] == "openet.get_point_forecast"
+            return {
+                "use_tool": True,
+                "tool_call": {
+                    "name": "openet.get_point_forecast",
+                    "arguments": {
+                        "location": "北京",
+                        "mete_vars": ["t2m@C", "tp", "ws10m", "tcc"],
+                        "horizon_hours": 48,
+                    },
+                },
+                "use_general_skill": False,
+                "use_knowledge": False,
+                "confidence": 0.98,
+            }
+        raise AssertionError("unexpected JSON prompt")
+
+    def fake_generate_text(self, system_prompt, payload):  # noqa: ANN001
+        calls.append("response")
+        assert payload["tool_result"]["success"] is True
+        assert payload["tool_result"]["data"]["resolved_location"]["display_name"] == "北京市, 中国"
+        return "北京明天白天约 28℃，有小雨，出门建议带伞。"
+
+    monkeypatch.setattr(LLMClient, "__init__", fake_init)
+    monkeypatch.setattr(LLMClient, "generate_json", fake_generate_json)
+    monkeypatch.setattr(LLMClient, "generate_text", fake_generate_text)
+
+    with _test_session() as db:
+        _seed_minimal_tenant(db)
+        agent = AgentProfile(
+            id="agent_weather_tool",
+            tenant_id="tenant_demo",
+            name="人事",
+            is_overall=True,
+        )
+        scene_skill = _purchase_scene_skill()
+        tool = Tool(
+            tenant_id="tenant_demo",
+            name="openet.get_point_forecast",
+            display_name="单点天气预报",
+            description="按地点名称查询天气预报，不要向用户询问经纬度。",
+            tool_type="mcp",
+            method="POST",
+            url="mcp://openet/get_point_forecast",
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"},
+                    "mete_vars": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["mete_vars"],
+            },
+        )
+        db.add(agent)
+        db.add(scene_skill)
+        db.add(tool)
+        db.flush()
+        ensure_open_gallery_binding(db, "tenant_demo", "skill", scene_skill.id, "active")
+        ensure_open_gallery_binding(db, "tenant_demo", "tool", tool.id, "active")
+        db.commit()
+
+        loop = AgentLoop(db)
+        loop.tool_executor = SimpleNamespace(
+            execute=lambda *_args, **_kwargs: ToolResult(
+                tool_name=tool.name,
+                success=True,
+                data={
+                    "resolved_location": {"display_name": "北京市, 中国"},
+                    "timestamps": ["2026-08-01 08:00:00"],
+                    "variables": ["t2m@C", "tp", "ws10m", "tcc"],
+                    "series": [{"values": [[28.0, 1.2, 3.5, 80.0]]}],
+                },
+            )
+        )
+        response = loop.handle_turn(
+            ChatTurnRequest(
+                tenant_id="tenant_demo",
+                agent_id=agent.id,
+                user_id="user_demo",
+                message="帮我查询北京明天的天气",
+            )
+        )
+
+        assert response.reply == "北京明天白天约 28℃，有小雨，出门建议带伞。"
+        assert response.tool_result is not None and response.tool_result.success is True
+        assert response.step_result is not None
+        assert response.step_result.tool_call is not None
+        assert response.step_result.tool_call.arguments["location"] == "北京"
+        assert calls == ["router", "selector", "response"]
+        events = db.exec(
+            select(AgentEvent).where(AgentEvent.session_id == response.session_id)
+        ).all()
+        event_types = [event.event_type for event in events]
+        assert "direct_tool_selected" in event_types
+        assert "tool_call_started" in event_types
+        assert "tool_call_finished" in event_types
+
+
+def test_stream_chat_turn_emits_direct_employee_tool_result(monkeypatch) -> None:
+    def fake_init(self, model_config):  # noqa: ANN001
+        return None
+
+    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        prompt_text = _system_and_stage_instructions(system_prompt, payload)
+        if "企业技能路由器" in prompt_text:
+            return {"decision": "answer_only", "user_intent": "查询北京明天天气"}
+        if "通用技能选择器" in prompt_text:
+            return {
+                "use_tool": True,
+                "tool_call": {
+                    "name": "openet.get_point_forecast",
+                    "arguments": {
+                        "location": "北京",
+                        "mete_vars": ["t2m@C", "tp"],
+                        "horizon_hours": 48,
+                    },
+                },
+                "use_general_skill": False,
+                "use_knowledge": False,
+            }
+        raise AssertionError("unexpected JSON prompt")
+
+    monkeypatch.setattr(LLMClient, "__init__", fake_init)
+    monkeypatch.setattr(LLMClient, "generate_json", fake_generate_json)
+    monkeypatch.setattr(
+        LLMClient,
+        "generate_text_stream",
+        lambda self, system_prompt, payload: iter(["北京明天", "有小雨。"]),
+    )
+    monkeypatch.setattr(AgentLoop, "_pace_stream", lambda self: None)
+
+    with _test_session() as db:
+        _seed_minimal_tenant(db)
+        agent = AgentProfile(
+            id="agent_weather_tool_stream",
+            tenant_id="tenant_demo",
+            name="人事",
+            is_overall=True,
+        )
+        scene_skill = _purchase_scene_skill()
+        tool = Tool(
+            tenant_id="tenant_demo",
+            name="openet.get_point_forecast",
+            display_name="单点天气预报",
+            description="按地点名称查询天气预报。",
+            tool_type="mcp",
+            method="POST",
+            url="mcp://openet/get_point_forecast",
+            input_schema={"type": "object", "properties": {"location": {"type": "string"}}},
+        )
+        db.add(agent)
+        db.add(scene_skill)
+        db.add(tool)
+        db.flush()
+        ensure_open_gallery_binding(db, "tenant_demo", "skill", scene_skill.id, "active")
+        ensure_open_gallery_binding(db, "tenant_demo", "tool", tool.id, "active")
+        db.commit()
+
+        loop = AgentLoop(db)
+        loop.tool_executor = SimpleNamespace(
+            execute=lambda *_args, **_kwargs: ToolResult(
+                tool_name=tool.name,
+                success=True,
+                data={"resolved_location": {"display_name": "北京市, 中国"}},
+            )
+        )
+        stream = list(
+            loop.handle_turn_stream(
+                ChatTurnRequest(
+                    tenant_id="tenant_demo",
+                    agent_id=agent.id,
+                    user_id="user_demo",
+                    message="帮我查询北京明天的天气",
+                )
+            )
+        )
+
+        event_names = [item["event"] for item in stream]
+        assert "tool_result" in event_names
+        assert "stream_end" in event_names
+        complete = next(item for item in stream if item["event"] == "complete")
+        assert complete["data"]["reply"] == "北京明天有小雨。"
+        assert complete["data"]["tool_result"]["success"] is True
 
 
 def test_general_skill_runner_repairs_failed_code(monkeypatch) -> None:

@@ -579,6 +579,105 @@ class AgentLoop:
             session_state=public_session(chat_session),
         )
 
+    def _try_handle_direct_tool_after_scene_router(
+        self,
+        request: ChatTurnRequest,
+        chat_session: ChatSession,
+        model_config: ModelConfig,
+        router_decision: RouterDecision,
+        selection: GeneralSkillSelection | None,
+        memory_context: list[dict[str, object]] | None = None,
+        conversation_context: dict[str, object] | None = None,
+        user_message_id: str | None = None,
+    ) -> ChatTurnResponse | None:
+        if (
+            not self._scene_router_deferred_to_general(router_decision)
+            or selection is None
+            or not selection.use_tool
+            or selection.tool_call is None
+        ):
+            return None
+        tool_call = selection.tool_call
+        self.events.record(
+            request.tenant_id,
+            chat_session.id,
+            "direct_tool_selected",
+            self._turn_payload(
+                {
+                    "tool_call": tool_call.model_dump(mode="json"),
+                    "confidence": selection.confidence,
+                    "reason": selection.reason,
+                    "scene_router_decision": router_decision.model_dump(mode="json"),
+                },
+                user_message_id,
+            ),
+        )
+        tool_result = self._execute_tool_call(
+            request,
+            chat_session,
+            tool_call,
+            tool_call_id=new_id("toolcall"),
+            conversation_context=conversation_context,
+            memory_context=memory_context,
+        )
+        step_result = StepAgentResult(
+            action="call_tool",
+            tool_call=tool_call,
+            is_step_completed=tool_result.success,
+        )
+        knowledge_step = self._auto_knowledge_step_result(
+            request,
+            chat_session,
+            model_config,
+            router_decision,
+            selection,
+        )
+        self._merge_capability_knowledge(step_result, knowledge_step)
+        active_skill = self._get_active_skill(
+            request.tenant_id, chat_session.active_skill_id, chat_session.agent_id
+        )
+        reply = self._generate_reply_segment(
+            request.message,
+            chat_session,
+            active_skill,
+            router_decision,
+            step_result,
+            tool_result,
+            model_config,
+            self._get_persona_prompt(request.tenant_id, chat_session.agent_id),
+            memory_context or [],
+            (
+                conversation_context
+                if conversation_context is not None
+                else self._conversation_context(chat_session)
+            ),
+        )
+        reply = self._finalize_turn(
+            chat_session,
+            request.tenant_id,
+            reply,
+            step_result,
+            request.message,
+            user_message_id=user_message_id,
+        )
+        self.db.commit()
+        self.db.refresh(chat_session)
+        self._enqueue_memory_capture(
+            request,
+            chat_session,
+            step_result,
+            tool_result,
+            model_config,
+        )
+        return ChatTurnResponse(
+            reply=reply,
+            session_id=chat_session.id,
+            router_decision=router_decision,
+            step_result=step_result,
+            tool_result=tool_result,
+            session_state=public_session(chat_session),
+        )
+
     def _general_skill_agent_outputs(
         self, run_response: GeneralSkillRunResponse
     ) -> tuple[StepAgentResult, ToolResult]:
@@ -905,6 +1004,167 @@ class AgentLoop:
             reply=reply,
             session_id=chat_session.id,
             router_decision=router_decision,
+            step_result=step_result,
+            tool_result=tool_result,
+            session_state=public_session(chat_session),
+        )
+        yield self._stream_event(
+            "complete",
+            chat_session,
+            self._turn_payload(result.model_dump(mode="json"), user_message_id),
+        )
+
+    def _stream_direct_tool_response(
+        self,
+        request: ChatTurnRequest,
+        chat_session: ChatSession,
+        model_config: ModelConfig,
+        selection: GeneralSkillSelection,
+        router_decision: RouterDecision | None = None,
+        memory_context: list[dict[str, object]] | None = None,
+        conversation_context: dict[str, object] | None = None,
+        persona_prompt: str | None = None,
+        user_message_id: str | None = None,
+        is_cancelled: Callable[[], bool] | None = None,
+    ) -> Iterator[dict[str, object]]:
+        tool_call = selection.tool_call
+        if not selection.use_tool or tool_call is None:
+            return
+        resolved_router_decision = router_decision or RouterDecision(
+            decision="answer_only", user_intent="员工工具执行结果回复"
+        )
+        tool_call_id = new_id("toolcall")
+        self.events.record(
+            request.tenant_id,
+            chat_session.id,
+            "direct_tool_selected",
+            self._turn_payload(
+                {
+                    "tool_call": tool_call.model_dump(mode="json"),
+                    "confidence": selection.confidence,
+                    "reason": selection.reason,
+                    "scene_router_decision": resolved_router_decision.model_dump(mode="json"),
+                },
+                user_message_id,
+            ),
+        )
+        yield self._stream_status(
+            chat_session,
+            "tool",
+            f"正在调用工具 {tool_call.name}",
+            {
+                "tool_name": tool_call.name,
+                "tool_call_id": tool_call_id,
+                "tool_call": tool_call.model_dump(mode="json"),
+            },
+            user_message_id=user_message_id,
+        )
+        if is_cancelled and is_cancelled():
+            return
+        tool_result = self._execute_tool_call(
+            request,
+            chat_session,
+            tool_call,
+            tool_call_id=tool_call_id,
+            conversation_context=conversation_context,
+            memory_context=memory_context,
+        )
+        step_result = StepAgentResult(
+            action="call_tool",
+            tool_call=tool_call,
+            is_step_completed=tool_result.success,
+        )
+        yield self._stream_event(
+            "step_result",
+            chat_session,
+            self._turn_payload(step_result.model_dump(mode="json"), user_message_id),
+        )
+        yield self._stream_event(
+            "tool_result",
+            chat_session,
+            self._turn_payload(
+                {
+                    **tool_result.model_dump(mode="json"),
+                    "tool_call_id": tool_call_id,
+                    "tool_call": tool_call.model_dump(mode="json"),
+                },
+                user_message_id,
+            ),
+        )
+        knowledge_stream_events: list[tuple[str, dict[str, object]]] = []
+        knowledge_step = self._auto_knowledge_step_result(
+            request,
+            chat_session,
+            model_config,
+            resolved_router_decision,
+            selection,
+            stream_events=knowledge_stream_events,
+        )
+        self._merge_capability_knowledge(step_result, knowledge_step)
+        for event_name, payload in knowledge_stream_events:
+            yield self._stream_event(
+                event_name,
+                chat_session,
+                self._turn_payload(payload, user_message_id),
+            )
+        yield self._stream_status(
+            chat_session, "responding", "正在生成回复", user_message_id=user_message_id
+        )
+        active_skill = self._get_active_skill(
+            request.tenant_id, chat_session.active_skill_id, chat_session.agent_id
+        )
+        reply = ""
+        for chunk in self._generate_reply_stream_segment(
+            request.message,
+            chat_session,
+            active_skill,
+            resolved_router_decision,
+            step_result,
+            tool_result,
+            model_config,
+            persona_prompt
+            if persona_prompt is not None
+            else self._get_persona_prompt(request.tenant_id, chat_session.agent_id),
+            memory_context or [],
+            (
+                conversation_context
+                if conversation_context is not None
+                else self._conversation_context(chat_session)
+            ),
+        ):
+            reply += chunk
+            yield self._stream_event(
+                "stream_delta",
+                chat_session,
+                self._turn_payload({"content": chunk}, user_message_id),
+            )
+            self._pace_stream()
+        if is_cancelled and is_cancelled():
+            return
+        yield self._stream_event(
+            "stream_end", chat_session, self._turn_payload({}, user_message_id)
+        )
+        reply = self._finalize_turn(
+            chat_session,
+            request.tenant_id,
+            reply,
+            step_result,
+            request.message,
+            user_message_id=user_message_id,
+        )
+        self.db.commit()
+        self.db.refresh(chat_session)
+        self._enqueue_memory_capture(
+            request,
+            chat_session,
+            step_result,
+            tool_result,
+            model_config,
+        )
+        result = ChatTurnResponse(
+            reply=reply,
+            session_id=chat_session.id,
+            router_decision=resolved_router_decision,
             step_result=step_result,
             tool_result=tool_result,
             session_state=public_session(chat_session),
@@ -1513,6 +1773,21 @@ class AgentLoop:
                     chat_session,
                     self._turn_payload(router_decision.model_dump(mode="json"), user_message_id),
                 )
+                if capability[1].use_tool and capability[1].tool_call is not None:
+                    yield from self._stream_direct_tool_response(
+                        request,
+                        chat_session,
+                        model_config,
+                        capability[1],
+                        router_decision,
+                        [],
+                        no_skill_context,
+                        persona_prompt,
+                        user_message.id,
+                        mark_current_turn_cancelled,
+                    )
+                    turn_finalized = True
+                    return
                 knowledge_stream_events: list[tuple[str, dict[str, object]]] = []
                 step_result = self._auto_knowledge_step_result(
                     request,
@@ -1655,6 +1930,21 @@ class AgentLoop:
                         user_message.id,
                         mark_current_turn_cancelled,
                     )
+                    return
+                if capability[1].use_tool and capability[1].tool_call is not None:
+                    yield from self._stream_direct_tool_response(
+                        request,
+                        chat_session,
+                        model_config,
+                        capability[1],
+                        router_decision,
+                        memory_context,
+                        conversation_context,
+                        persona_prompt,
+                        user_message.id,
+                        mark_current_turn_cancelled,
+                    )
+                    turn_finalized = True
                     return
 
             before_skill = chat_session.active_skill_id
@@ -2247,6 +2537,29 @@ class AgentLoop:
                     general_response=general_response,
                     user_message_id=user_message.id,
                 )
+            direct_tool_response = self._try_handle_direct_tool_after_scene_router(
+                request,
+                chat_session,
+                model_config,
+                router_decision,
+                capability[1],
+                [],
+                no_skill_context,
+                user_message.id,
+            )
+            if direct_tool_response:
+                return PreparedTurn(
+                    chat_session=chat_session,
+                    model_config=model_config,
+                    active_skill=None,
+                    router_decision=router_decision,
+                    step_result=StepAgentResult(),
+                    tool_result=None,
+                    memory_context=[],
+                    conversation_context=no_skill_context,
+                    general_response=direct_tool_response,
+                    user_message_id=user_message.id,
+                )
             step_result = self._auto_knowledge_step_result(
                 request,
                 chat_session,
@@ -2343,6 +2656,29 @@ class AgentLoop:
                 memory_context=memory_context,
                 conversation_context=conversation_context,
                 general_response=general_response,
+                user_message_id=user_message.id,
+            )
+        direct_tool_response = self._try_handle_direct_tool_after_scene_router(
+            request,
+            chat_session,
+            model_config,
+            router_decision,
+            capability[1] if capability else None,
+            memory_context,
+            conversation_context,
+            user_message.id,
+        )
+        if direct_tool_response:
+            return PreparedTurn(
+                chat_session=chat_session,
+                model_config=model_config,
+                active_skill=None,
+                router_decision=router_decision,
+                step_result=StepAgentResult(),
+                tool_result=None,
+                memory_context=memory_context,
+                conversation_context=conversation_context,
+                general_response=direct_tool_response,
                 user_message_id=user_message.id,
             )
 
@@ -5088,6 +5424,7 @@ class AgentLoop:
         memory_context: list[dict[str, object]] | None = None,
     ) -> tuple[GeneralSkill | None, GeneralSkillSelection]:
         general_skills = self._list_published_general_skills(model_config.tenant_id, agent_id)
+        available_tools = self._list_enabled_tools(model_config.tenant_id, agent_id)
         try:
             selection = self.general_skill_selector.decide(
                 message,
@@ -5095,6 +5432,7 @@ class AgentLoop:
                 model_config,
                 conversation_context,
                 memory_context,
+                available_tools,
             )
         except LLMError as exc:
             return None, GeneralSkillSelection(reason=f"Capability selection failed: {exc}")

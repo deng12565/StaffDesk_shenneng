@@ -9,6 +9,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.tools.tool_schema import ToolCall
+
 
 class GeneralSkillFile(BaseModel):
     path: str
@@ -93,6 +95,8 @@ class GeneralSkillRunResponse(BaseModel):
 
 
 class GeneralSkillSelection(BaseModel):
+    use_tool: bool = False
+    tool_call: Optional[ToolCall] = None
     use_general_skill: bool = False
     selected_slug: Optional[str] = None
     use_knowledge: bool = False

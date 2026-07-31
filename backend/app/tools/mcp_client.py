@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import selectors
 import subprocess
+import threading
 import time
 from collections.abc import Mapping
 from contextlib import suppress
@@ -501,6 +503,8 @@ def _read_response(
 ) -> dict[str, Any]:
     if proc.stdout is None:
         raise MCPClientError("MCP stdio stdout 不可用。")
+    if os.name == "nt":
+        return _read_response_from_windows_pipe(proc, expected_id, timeout_seconds)
     selector = selectors.DefaultSelector()
     selector.register(proc.stdout, selectors.EVENT_READ)
     deadline = time.monotonic() + max(timeout_seconds, 0.1)
@@ -524,6 +528,45 @@ def _read_response(
                 return payload
     finally:
         selector.close()
+
+
+def _read_response_from_windows_pipe(
+    proc: subprocess.Popen[str],
+    expected_id: int,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    """Read a Windows subprocess pipe without select(), which only supports sockets."""
+    responses: queue.Queue[dict[str, Any] | BaseException | None] = queue.Queue(maxsize=1)
+
+    def read_until_match() -> None:
+        assert proc.stdout is not None
+        try:
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    responses.put(None)
+                    return
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(payload, dict) and payload.get("id") == expected_id:
+                    responses.put(payload)
+                    return
+        except BaseException as exc:  # pragma: no cover - defensive pipe boundary
+            responses.put(exc)
+
+    threading.Thread(target=read_until_match, daemon=True).start()
+    try:
+        result = responses.get(timeout=max(timeout_seconds, 0.1))
+    except queue.Empty as exc:
+        raise MCPClientError(f"MCP stdio 等待响应超时：id={expected_id}") from exc
+    if isinstance(result, BaseException):
+        raise MCPClientError(f"MCP stdio 读取响应失败：{result}") from result
+    if result is None:
+        stderr = _read_stderr(proc)
+        raise MCPClientError(f"MCP stdio server 提前退出。{stderr}".strip())
+    return result
 
 
 def _raise_json_rpc_error(payload: dict[str, Any]) -> None:

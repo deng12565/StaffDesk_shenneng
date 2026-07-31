@@ -252,10 +252,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     }
     return counts;
   }, [rows]);
-  const visibleServers = useMemo(
-    () => (isOverallAgent ? servers : servers.filter((row) => agentServerToolCounts.has(row.id))),
-    [agentServerToolCounts, isOverallAgent, servers],
-  );
+  const visibleServers = servers;
   const serverToolCount = (row: MCPServerRead) =>
     isOverallAgent ? row.tool_count : agentServerToolCounts.get(row.id) || 0;
 
@@ -429,6 +426,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
 
   function renderActions(row: ToolRead) {
     const isMcpChild = row.tool_type === 'mcp' && Boolean(row.mcp_server_id);
+    const canRemoveFromScope = canManageCurrentScope && (!isMcpChild || !isOverallAgent);
     return (
       <DropdownMenu>
         <DropdownMenuTrigger
@@ -438,17 +436,24 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
           <IconMore className="size-3.5" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className={MENU_CONTENT_CLASS}>
-          {canManageCurrentScope && !isMcpChild && (
-            <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => navigate(`/enterprise/tools/${row.id}/edit`)}>
+          {canManageCurrentScope && (
+            <DropdownMenuItem
+              className={MENU_ITEM_CLASS}
+              onSelect={() => navigate(
+                isMcpChild
+                  ? `/enterprise/tools/mcp/${row.mcp_server_id}/edit`
+                  : `/enterprise/tools/${row.id}/edit`,
+              )}
+            >
               <IconEdit />
-              编辑
+              {isMcpChild ? '编辑工具集' : '编辑'}
             </DropdownMenuItem>
           )}
           <DropdownMenuItem className={MENU_ITEM_CLASS} onSelect={() => navigate(`/enterprise/tools/${row.id}/test`)}>
             <FlaskConical />
             测试
           </DropdownMenuItem>
-          {canManageCurrentScope && !isMcpChild && (
+          {canRemoveFromScope && (
             <>
               <DropdownMenuSeparator className="my-[2px] bg-[#eef0f4]" />
               <DropdownMenuItem
@@ -583,8 +588,9 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     {
       key: 'actions',
       title: '操作',
-      width: 160,
+      width: 224,
       align: 'right',
+      className: 'whitespace-nowrap',
       render: (row) => (
         <div className="flex items-center justify-end gap-[8px]">
           <UIButton
@@ -597,7 +603,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
             <IconRefresh className="size-[14px] shrink-0" />
             发现/同步
           </UIButton>
-          {canManageCurrentScope && (
+          {canManageCurrentScope && (isOverallAgent || agentServerToolCounts.has(row.id)) && (
             <UIButton
               variant="outline"
               size="sm"
@@ -739,7 +745,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
                       <IconRefresh className="size-[14px] shrink-0" />
                       发现/同步
                     </UIButton>
-                    {canManageCurrentScope && (
+                    {canManageCurrentScope && (isOverallAgent || agentServerToolCounts.has(row.id)) && (
                       <UIButton
                         variant="outline"
                         size="sm"
