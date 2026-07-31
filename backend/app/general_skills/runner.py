@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：通用技能选择与执行器，物化技能包、准备隔离环境并运行脚本。
+
+主要类型：GeneralSkillSelector, GeneralSkillRunner；主要协作模块：app.db.models、app.general_skills.runtime_env、app.general_skills.schema。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json
@@ -68,6 +73,7 @@ GENERAL_SKILL_REPLY_OUTPUT = {"reply": "string"}
 
 
 class GeneralSkillSelector:
+    # 阅读提示：从员工可见通用技能中选择候选，不负责执行脚本。
     def decide(
         self,
         query: str,
@@ -109,6 +115,7 @@ class GeneralSkillSelector:
 
 
 class GeneralSkillRunner:
+    # 阅读提示：物化技能包并在受控运行环境执行，统一收集输出、错误和超时。
     def run(
         self,
         skill: GeneralSkill,

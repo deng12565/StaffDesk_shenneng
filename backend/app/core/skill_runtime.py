@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：场景技能状态机运行时，维护节点、槽位、任务帧和技能栈。
+
+主要类型：SkillRuntime；主要协作模块：app.db.models、app.session.session_schema、app.session.slot_policy。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -22,6 +27,7 @@ TASK_IDENTITY_FIELDS = {
 
 
 class SkillRuntime:
+    # 阅读提示：把步骤决策落到会话状态机，集中维护节点、槽位和任务帧一致性。
     def apply_decision(self, session: ChatSession, decision: RouterDecision) -> ChatSession:
         _sanitize_decision_slots(decision)
         session.slots_json = strip_router_generated_message_slots(session.slots_json)

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：认证基础设施，提供密码哈希、访问令牌签发解析和当前用户依赖。
+
+主要入口：hash_password, verify_password, create_access_token, get_current_user, ensure_current_user_tenant, require_current_tenant；主要协作模块：app.config、app.db、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import base64
@@ -49,6 +54,7 @@ def create_access_token(user: User) -> str:
     return f"{body}.{signature}"
 
 
+# 阅读提示：FastAPI 鉴权依赖，从 Bearer 令牌恢复用户，后续仍需做租户和资源权限检查。
 def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
     db: Session = Depends(get_session),

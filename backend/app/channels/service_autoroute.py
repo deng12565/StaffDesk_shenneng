@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：渠道消息自动路由服务，使用模型意图分类并维护员工切换决策。
+
+主要入口：RouteDecision, auto_route_enabled, classify_intent, recent_channel_messages, maybe_auto_route, record_auto_route_event；主要协作模块：app.agents.branching、app.channels.service_routing、app.channels.service_session。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json
@@ -151,6 +156,7 @@ def _route_candidates(db: Session, tenant_id: str, agent_ids: list[str]) -> list
     ]
 
 
+# 阅读提示：在没有强制切换和接管状态时尝试模型路由，并返回可审计的决策。
 def maybe_auto_route(
     db: Session,
     binding: ChannelBinding,

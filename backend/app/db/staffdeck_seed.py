@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：StaffDeck 管理员与广场内容种子，维护官方员工、技能、工具和知识示例。
+
+主要入口：seed_staffdeck_admin_gallery；主要协作模块：app.agents.branching、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from datetime import datetime

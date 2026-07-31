@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：聊天回合取消状态的线程安全内存存储。
+
+主要入口：cancel_chat_turn, clear_chat_turn_cancelled, is_chat_turn_cancelled。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from threading import Lock

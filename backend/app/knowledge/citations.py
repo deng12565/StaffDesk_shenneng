@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：知识引用格式化工具，生成稳定引用标签并恢复被截断的原子引用。
+
+主要入口：compact_knowledge_citation_labels, restore_truncated_atomic_references, knowledge_citations_from_results。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import re

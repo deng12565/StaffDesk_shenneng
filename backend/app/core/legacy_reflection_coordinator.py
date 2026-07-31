@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：旧版反思协调器，决定是否复盘工具结果并驱动修复动作。
+
+主要类型：LegacyReflectionCoordinator, LegacyReflectionPolicy；主要协作模块：app.core.reflection_agent、app.db.models、app.session.session_schema。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable

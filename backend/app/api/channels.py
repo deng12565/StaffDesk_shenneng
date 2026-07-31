@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：渠道接入管理 API，编排渠道绑定、二维码、连接状态、凭据校验和员工挂载。
+
+主要入口：list_channel_meta, list_channel_bindings, create_channel_binding, create_bind_code, list_my_identity_bindings, delete_my_identity_binding；主要协作模块：app.channels、app.channels.adapters.dingtalk、app.channels.adapters.feishu。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json
@@ -265,6 +270,7 @@ def list_channel_bindings(
     return [channel_binding_read(db, row) for row in rows]
 
 
+# 阅读提示：创建渠道绑定时校验凭据和账号唯一性，连接器生命周期由 channels 子系统接管。
 @router.post("", response_model=ChannelBindingRead)
 def create_channel_binding(
     request: ChannelBindingCreate,

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：旧版工具动作协调器，处理确认、调用、结果记录、重试和回放。
+
+主要类型：LegacyToolActionCallbacks, LegacyToolAction；主要协作模块：app.db.models、app.session.session_schema、app.tools.tool_schema。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable

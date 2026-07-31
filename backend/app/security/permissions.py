@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：租户、管理员、员工范围和广场资源的权限检查集合。
+
+主要入口：is_admin_user, ensure_tenant_admin, require_tenant_admin, require_agent_scope_viewer, ensure_open_gallery_admin, ensure_agent_scope_manager；主要协作模块：app.db、app.db.models、app.security.auth。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from fastapi import Depends, HTTPException, Query
@@ -56,6 +61,7 @@ def ensure_open_gallery_admin(tenant_id: str, current_user: User) -> None:
     ensure_tenant_admin(tenant_id, current_user)
 
 
+# 阅读提示：统一判断调用者能否管理指定员工范围，避免各 API 自行拼接权限规则。
 def ensure_agent_scope_manager(
     db: Session,
     tenant_id: str,

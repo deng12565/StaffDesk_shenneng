@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：知识文档 API，负责上传、解析任务、文档管理、检索与 OKF 导入导出。
+
+主要入口：upload_document, import_okf_bundle, list_jobs, get_job, cancel_job, list_documents；主要协作模块：app.agents.branching、app.async_jobs、app.db。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import base64
@@ -83,6 +88,7 @@ router = APIRouter(
 )
 
 
+# 阅读提示：上传后先创建知识摄取任务，解析、分块和索引在异步服务中完成。
 @router.post("/documents", response_model=KnowledgeIngestJobRead)
 def upload_document(
     request: KnowledgeDocumentUploadRequest,
@@ -594,6 +600,7 @@ def update_chunk(
     return chunk_read(row)
 
 
+# 阅读提示：管理端检索调试入口，实际召回逻辑位于 KnowledgeService。
 @router.post("/search", response_model=KnowledgeSearchResponse)
 def search_knowledge(
     request: KnowledgeSearchRequest,

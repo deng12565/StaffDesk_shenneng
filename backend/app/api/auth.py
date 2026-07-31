@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：认证与账号管理 API，处理登录、当前用户、用户资料和头像。
+
+主要类型：LoginRequest, UserCreateRequest, UserUpdateRequest, UserRead, AvatarRead, LoginResponse；主要协作模块：app.db、app.db.models、app.security.auth。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import base64
@@ -64,6 +69,7 @@ class LoginResponse(BaseModel):
     user: UserRead
 
 
+# 阅读提示：登录入口只签发 StaffDeck 访问令牌；模型和渠道密钥不经过这里。
 @router.post("/login", response_model=LoginResponse)
 def login(request: LoginRequest, db: Session = Depends(get_session)) -> LoginResponse:
     ensure_tenant(db, request.tenant_id)

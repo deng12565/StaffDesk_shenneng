@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：长期记忆领域服务，负责模型提取、去重、查询、员工归属和活动记录转换。
+
+主要入口：MemoryService, memory_read, memory_rows_for_read, memory_agent_id, memory_matches_agent, tool_read_for_activity；主要协作模块：app.db.models、app.llm、app.observability.spans。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -24,6 +29,7 @@ class MemoryService:
     def __init__(self, db: Session):
         self.db = db
 
+    # 阅读提示：按用户、员工和当前请求召回长期记忆，返回可放入模型上下文的记录。
     def recall(
         self,
         tenant_id: str,
@@ -53,6 +59,7 @@ class MemoryService:
             if row.kind in ALLOWED_MEMORY_KINDS
         ]
 
+    # 阅读提示：回合结束后提取可长期保存的信息；失败不应阻塞用户回复。
     def capture_turn(
         self,
         request: ChatTurnRequest,

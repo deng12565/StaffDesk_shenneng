@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：定时任务后台 worker，周期扫描到期任务并管理线程生命周期。
+
+主要入口：run_worker, start_background_worker, stop_background_worker, main；主要协作模块：app.db、app.db.seed、app.scheduled_tasks.service。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import argparse

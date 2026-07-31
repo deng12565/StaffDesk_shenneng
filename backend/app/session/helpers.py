@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：会话模型到公共响应结构的转换辅助函数。
+
+主要入口：public_session；主要协作模块：app.db.models、app.session.session_schema。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from app.db.models import ChatSession

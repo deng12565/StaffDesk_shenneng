@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：内置 MCP 演示实现，为无需外部进程的开发验证提供示例工具。
+
+主要入口：BuiltinMCPError, execute_builtin_mcp, builtin_mcp_tool_names, builtin_mcp_tool_definitions。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any

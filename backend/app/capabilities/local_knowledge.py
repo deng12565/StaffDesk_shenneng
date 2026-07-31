@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：本地知识能力适配器，按员工可见范围执行知识检索和引用查询。
+
+主要类型：LocalKnowledgeRuntime；主要协作模块：app.agents.branching、app.capabilities.contracts、app.capabilities.errors。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -47,6 +52,7 @@ class LocalKnowledgeRuntime(KnowledgeRuntime):
             for knowledge_base_id, version in versions.items()
         )
 
+    # 阅读提示：把通用知识查询契约翻译为本地 KnowledgeService 检索，并保留引用身份。
     def search(
         self, context: CapabilityContext, request: KnowledgeSearchQuery
     ) -> KnowledgeSearchResult:

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：MCP 客户端协议层，统一 stdio、Streamable HTTP、旧 SSE 和内置 transport。
+
+主要入口：MCPClientError, normalize_transport, execute_mcp_tool, list_mcp_tools；主要协作模块：app.tools.mcp_builtin。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json
@@ -16,6 +21,11 @@ from app.tools.mcp_builtin import (
     builtin_mcp_tool_definitions,
     execute_builtin_mcp,
 )
+
+
+# 阅读入口：上层只调用 execute_mcp_tool/list_mcp_tools；本文件再按 transport
+# 选择会话实现。每个会话都遵循 initialize -> initialized 通知 -> tools/list
+# 或 tools/call，因此接入新的天气 MCP 时通常只需提供连接配置，不必改协议层。
 
 
 class MCPClientError(RuntimeError):
@@ -51,6 +61,7 @@ def normalize_transport(config: dict[str, Any]) -> str:
 # 对外入口：调用工具 / 列举工具
 # --------------------------------------------------------------------------- #
 
+# 阅读提示：运行时 MCP 调用入口，完成握手后调用指定远端工具并标准化 content。
 def execute_mcp_tool(
     config: dict[str, Any],
     arguments: dict[str, Any],
@@ -81,6 +92,7 @@ def execute_mcp_tool(
     raise MCPClientError(f"不支持的 MCP transport：{transport or '<empty>'}")
 
 
+# 阅读提示：接入阶段的工具发现入口，只读取定义，不创建 StaffDeck Tool。
 def list_mcp_tools(
     config: dict[str, Any],
     timeout_seconds: float = 10,
@@ -135,7 +147,8 @@ def _normalize_tool_definition(item: dict[str, Any]) -> dict[str, Any]:
 class _MCPSession:
     """封装一次 MCP 连接的 initialize + list/call 交互。
 
-    子类实现 `_request`（单次 JSON-RPC 请求/响应）和资源管理。
+    子类只负责把同一套 JSON-RPC 消息送到不同 transport；工具发现和调用的
+    协议顺序由这个基类统一控制。阅读具体连接问题时再进入对应 Session 子类。
     """
 
     def __init__(self, config: dict[str, Any], timeout_seconds: float) -> None:

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：飞书连接器进程管理器，依据数据库绑定状态启动、停止和巡检连接器。
+
+主要类型：FeishuProcessManager；主要协作模块：app.channels.feishu_process、app.db、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import logging

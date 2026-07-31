@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：会话事件日志写入器，为 Agent 执行过程持久化可追踪事件。
+
+主要类型：EventLog；主要协作模块：app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any

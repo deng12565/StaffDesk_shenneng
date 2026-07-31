@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：钉钉 Stream 回调运行时，把 SDK 回调转换为耐久入站事件。
+
+主要类型：DingTalkCallbackHandler；主要协作模块：app.channels.adapters.dingtalk、app.channels.service_dingtalk_inbox。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any

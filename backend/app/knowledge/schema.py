@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：知识库、文档、分块、概念、关系和检索结果的数据契约。
+
+主要类型：KnowledgeBaseCreateRequest, KnowledgeBaseUpdateRequest, KnowledgeBaseRollbackRequest, KnowledgeBaseRead, KnowledgeDocumentUploadRequest, KnowledgeIngestJobRead。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any, Literal, Optional

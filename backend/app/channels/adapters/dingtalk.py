@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：钉钉渠道适配器，负责消息归一化、凭据校验、令牌获取和消息发送。
+
+主要入口：DingTalkSendError, DingTalkPermanentError, DingTalkTransientError, DingTalkTokenProvider, normalize_dingtalk_message, validate_dingtalk_credentials；主要协作模块：app.channels.adapters.base、app.channels.crypto、app.db。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import logging

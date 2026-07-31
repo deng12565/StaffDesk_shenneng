@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：技能图、版本、生成、编辑、反思和统计的数据契约。
+
+主要类型：SkillGraphNode, SkillGraphEdge, SkillCard, ToolSuggestion, SkillCreateRequest, SkillUpdateRequest。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any, Literal, Optional

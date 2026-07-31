@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：知识库 API，处理知识库版本、概念、关系和回滚等管理操作。
+
+主要入口：list_knowledge_bases, create_knowledge_base, get_knowledge_base, update_knowledge_base, list_knowledge_base_versions, list_okf_concepts；主要协作模块：app.db、app.agents.branching、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from urllib.parse import quote

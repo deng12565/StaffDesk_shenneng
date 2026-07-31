@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：运行路径解析工具，统一源码模式和打包模式下的资源与用户数据目录。
+
+主要入口：is_frozen, app_root, resource_dir, user_data_dir。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import os

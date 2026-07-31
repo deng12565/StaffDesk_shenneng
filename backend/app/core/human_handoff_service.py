@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：人工接管状态服务，负责创建、查询、回复和解除接管请求。
+
+主要类型：HumanHandoffService；主要协作模块：app.db.models、app.session.session_schema。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import re
@@ -22,6 +27,7 @@ class HumanHandoffService:
         self.db = db
         self.events = events
 
+    # 阅读提示：创建接管记录并冻结自动推进所需状态，后续回复由聊天 API 恢复。
     def create(
         self,
         tenant_id: str,

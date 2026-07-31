@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：应用配置中心，从环境变量读取数据库、模型、渠道、超时和运行参数。
+
+主要入口：Settings, get_settings。阅读时先从这些入口跟踪调用关系。
+"""
+
 import os as _os
 from functools import lru_cache
 

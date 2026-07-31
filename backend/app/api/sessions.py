@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：管理端会话 API，按权限提供会话列表、详情和重置操作。
+
+主要入口：list_sessions, get_session_detail, reset_session；主要协作模块：app.api.chat、app.db、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：任务帧策略，管理多任务排队、恢复和工具结果归属。
+
+主要类型：QueuedTaskContinuation, TaskFramePolicy；主要协作模块：app.db.models、app.session.session_schema、app.tools.tool_schema。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：能力提供方的结构化错误类型与异常封装。
+
+主要类型：CapabilityErrorInfo, CapabilityProviderError。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json

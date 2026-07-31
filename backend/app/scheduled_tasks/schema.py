@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：定时任务、任务草稿和运行记录的数据契约。
+
+主要类型：ScheduledTaskBase, ScheduledTaskCreateRequest, ScheduledTaskUpdateRequest, ScheduledTaskDraftRequest, ScheduledTaskDraftRead, ScheduledTaskRead。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any, Literal, Optional

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：渠道绑定、挂载员工、二维码、会话和投递记录的 API 数据契约。
+
+主要类型：ChannelBindingCreate, ChannelBindingAgentRead, ChannelBindingAgentInput, ChannelBindingAgentsUpdate, ChannelBindingRead, ChannelQRCodeRead；主要协作模块：app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Optional

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：工具运行时执行器，先做权限检查，再分发 HTTP 或 MCP 调用并标准化结果。
+
+主要类型：ToolExecutionPolicy, ToolExecutor；主要协作模块：app.agents.branching、app.config、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import os
@@ -27,10 +32,18 @@ class ToolExecutionPolicy:
 
 
 class ToolExecutor:
+    """所有运行时工具调用的统一边界。
+
+    先按租户、员工和当前技能检查本地 Tool 权限，再按 tool_type 分发到 HTTP
+    或 MCP。AgentLoop 不直接理解 MCP transport，这一层负责把统一 ToolCall
+    转换成具体协议调用。
+    """
+
     def __init__(self, db: Session):
         self.db = db
         self.settings = get_settings()
 
+    # 阅读提示：所有模型工具调用最终进入这里，权限校验先于 HTTP 或 MCP 网络请求。
     def execute(
         self,
         tenant_id: str,
@@ -131,7 +144,12 @@ class ToolExecutor:
         return ToolExecutionPolicy(timeout_seconds=timeout_seconds)
 
     def _resolve_mcp_config(self, tool: Tool) -> tuple[dict[str, Any], str | None]:
-        """Resolve an MCP tool through its persisted MCP server relation."""
+        """通过关联的 MCPServer 还原连接配置和远端工具名。
+
+        MCPServer 保存共享的连接信息；Tool.config_json 只保存该 server 下的
+        叶子工具名及执行策略。两者分开后，同一天气 server 的多个工具无需
+        各自复制 URL、headers 或 stdio 启动参数。
+        """
         tool_config = tool.config_json or {}
         tool_name = (
             str(tool_config.get("tool") or tool_config.get("tool_name") or "").strip() or None

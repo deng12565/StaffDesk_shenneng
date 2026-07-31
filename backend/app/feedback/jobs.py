@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：反馈分析后台任务入口，把会话反馈分析提交到异步队列并记录 span。
+
+主要入口：enqueue_feedback_analysis, run_feedback_analysis_job；主要协作模块：app.async_jobs、app.db、app.feedback.service。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any

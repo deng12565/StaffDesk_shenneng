@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：聊天 API，负责会话消息、流式回合、取消、人工接管和引用内容的对外转换。
+
+主要入口：HumanHandoffRead, ChatTurnCancelRequest, HumanHandoffReplyRequest, session_read, message_read, human_handoff_read；主要协作模块：app.agents.branching、app.channels.service_outbox、app.core。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json
@@ -903,6 +908,7 @@ async def upload_chat_attachments(
     return parsed
 
 
+# 阅读提示：非流式聊天入口，把 HTTP 请求交给 AgentLoop 并返回完整回合结果。
 @router.post("/turn", response_model=ChatTurnResponse)
 def chat_turn(
     request: ChatTurnRequest,
@@ -942,6 +948,7 @@ def chat_turn(
     return response
 
 
+# 阅读提示：流式聊天入口，把 AgentLoop 事件转换为 SSE，同时处理断开和取消。
 @router.post("/stream")
 def chat_stream(
     request: ChatTurnRequest,

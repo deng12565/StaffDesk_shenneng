@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：技能生成结果反思器，按规则和模型审查迭代修复技能结构。
+
+主要入口：reflect_skill_response, reflect_skill_response_stream；主要协作模块：app.llm、app.skills.skill_schema。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json

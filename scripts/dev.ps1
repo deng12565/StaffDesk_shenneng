@@ -9,6 +9,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $candidates = @(
+  [pscustomobject]@{ File = (Join-Path $root "backend\.venv\Scripts\python.exe"); Prefix = @() },
   [pscustomobject]@{ File = $env:PYTHON; Prefix = @() },
   [pscustomobject]@{ File = "py"; Prefix = @("-3.11") },
   [pscustomobject]@{ File = "py"; Prefix = @("-3") },
@@ -19,8 +20,14 @@ $python = $null
 foreach ($candidate in $candidates) {
   if (-not $candidate.File) { continue }
   if (-not (Get-Command $candidate.File -ErrorAction SilentlyContinue)) { continue }
-  & $candidate.File @($candidate.Prefix) -c "import sys; assert sys.version_info >= (3, 11)" 2>$null
-  if ($LASTEXITCODE -eq 0) {
+  $probeExitCode = 1
+  try {
+    & $candidate.File @($candidate.Prefix) -c "import sys; assert sys.version_info >= (3, 11)" 2>$null
+    $probeExitCode = $LASTEXITCODE
+  } catch {
+    continue
+  }
+  if ($probeExitCode -eq 0) {
     $python = $candidate
     break
   }

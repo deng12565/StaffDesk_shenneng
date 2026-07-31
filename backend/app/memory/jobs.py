@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：长期记忆提取后台任务，从已完成回合收集消息并提交记忆服务。
+
+主要入口：enqueue_memory_capture, run_memory_capture_job；主要协作模块：app.async_jobs、app.db、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any

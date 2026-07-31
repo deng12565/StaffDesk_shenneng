@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：技能编辑器，把自然语言修改转换为受限补丁并应用到技能图。
+
+主要类型：SkillEditor；主要协作模块：app.db.models、app.llm、app.skills.llm_limits。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json
@@ -52,6 +57,7 @@ NODE_FIELDS = {
 
 
 class SkillEditor:
+    # 阅读提示：把自然语言修改限制为允许的技能图补丁，避免任意字段被模型覆盖。
     def rewrite(self, request: SkillRewriteRequest, model_config: ModelConfig) -> SkillRewriteResponse:
         client = LLMClient(skill_model_config(model_config))
         payload = self._payload(request)

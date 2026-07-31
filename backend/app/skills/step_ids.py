@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：技能节点标识规范化工具，保证步骤和图节点 ID 唯一稳定。
+
+主要入口：skill_card_with_unique_step_ids, ensure_unique_step_ids, ensure_unique_node_ids；主要协作模块：app.skills.skill_schema。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any

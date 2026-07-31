@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：内部演示工具 API，模拟订单、商品、履约和福利等可调用业务接口。
+
+主要类型：MockOrderQueryRequest, MockProductPurchaseRequest, MockProductPriceQueryRequest, MockOrderAddRequest, MockBenefitReconcileRequest, MockFulfillmentReroutePlanRequest；主要协作模块：app.db、app.db.models、app.security.internal_service。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

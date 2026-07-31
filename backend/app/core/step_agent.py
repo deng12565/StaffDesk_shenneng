@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：步骤 Agent，为当前技能节点决定询问、知识、工具、完成或切换动作。
+
+主要类型：StepAgent；主要协作模块：app.core.context_projection、app.db.models、app.llm。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from app import paths
@@ -50,6 +55,7 @@ GENERAL_SKILL_TOOL_PREFIX = "general_skill."
 
 
 class StepAgent:
+    # 阅读提示：根据当前技能节点与槽位生成下一动作，执行动作仍由 AgentLoop 协调。
     def run(
         self,
         message: str,

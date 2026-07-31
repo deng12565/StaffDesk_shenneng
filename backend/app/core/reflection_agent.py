@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：反思 Agent，评估知识、技能和工具结果是否需要修复或重试。
+
+主要入口：ReflectionDecision, ReflectionAgent, action_needs_reflection, tool_result_needs_reflection；主要协作模块：app.core.context_projection、app.db.models、app.llm。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from pydantic import BaseModel
@@ -34,6 +39,7 @@ class ReflectionDecision(BaseModel):
 
 
 class ReflectionAgent:
+    # 阅读提示：只评估当前动作结果是否可信以及如何修复，不直接再次执行动作。
     def review(
         self,
         message: str,

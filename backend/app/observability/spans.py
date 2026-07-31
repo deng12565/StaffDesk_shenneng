@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：轻量 span 观测工具，记录 LLM 和后台操作的开始、结束、耗时与错误。
+
+主要入口：emit_span_event, bind_span_sink, set_span_sink, reset_span_sink, llm_operation, llm_span_attributes。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator

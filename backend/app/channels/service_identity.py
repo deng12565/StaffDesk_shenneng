@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：渠道身份规范化服务，生成外部账号、会话和用户作用域的稳定键。
+
+主要入口：IdentityScopeConflict, channel_label, scope_from_config, external_account_scope, external_account_key, legacy_external_account_keys；主要协作模块：app.db.models、app.security.auth。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import hashlib

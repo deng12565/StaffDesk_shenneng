@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：耐久入站处理的共享状态与返回类型，描述暂存、重复和拒绝结果。
+
+主要入口：StageDisposition, StageResult, reaction_target。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

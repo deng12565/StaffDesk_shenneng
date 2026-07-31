@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：飞书连接器独立工作进程，负责进程锁、子进程监督、心跳与故障恢复。
+
+主要入口：binding_lock_path, BindingProcessLock, ConnectorChildSpec, ChildControl, FrameWatchdog, connector_child_entry。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import asyncio

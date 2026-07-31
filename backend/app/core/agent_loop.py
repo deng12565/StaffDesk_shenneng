@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：Agent 主编排循环，串联路由、知识、技能、工具、反思、记忆与最终响应。
+
+主要类型：AgentLoopPreconditionError, PreparedTurn, AgentLoop；主要协作模块：app.agents.branching、app.capabilities.contracts、app.capabilities.local_general_skill。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import queue
@@ -235,6 +240,7 @@ class AgentLoop:
     ) -> list[str] | None:
         return SlotHydrationPolicy.trim_satisfied_awaiting_fields(router_decision, slots)
 
+    # 阅读提示：同步回合总入口，负责准备上下文并驱动路由、技能、工具、反思和收尾。
     def handle_turn(self, request: ChatTurnRequest) -> ChatTurnResponse:
         LegacyKnowledgeAction.reset_turn()
         router_decision: RouterDecision | None = None
@@ -1233,6 +1239,7 @@ class AgentLoop:
             tool_result,
         )
 
+    # 阅读提示：流式回合与同步回合共享业务阶段，只把中间状态逐步产出给调用方。
     def handle_turn_stream(self, request: ChatTurnRequest) -> Iterator[dict[str, object]]:
         LegacyKnowledgeAction.reset_turn()
         router_decision: RouterDecision | None = None
@@ -4365,6 +4372,9 @@ class AgentLoop:
         conversation_context: dict[str, object] | None = None,
         memory_context: list[dict[str, object]] | None = None,
     ) -> ToolResult:
+        # HTTP 和 MCP 都从这里进入同一条审计链：先校验员工可见性和幂等重放，
+        # 再记录 started/finished 事件。真正的协议差异下沉到 ToolExecutor，
+        # 所以接入天气 MCP 不需要在 AgentLoop 增加 MCP 专用分支。
         if (
             not tool_call.name.startswith(GENERAL_SKILL_TOOL_PREFIX)
             and chat_session.agent_id

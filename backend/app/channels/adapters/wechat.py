@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：微信 iLink 渠道客户端与适配器，处理主机校验、登录状态、收发消息和会话恢复。
+
+主要入口：validate_wechat_host, sanitize_wechat_baseurl, WeChatApiError, random_wechat_uin, split_wechat_text, WeChatClient；主要协作模块：app.channels.adapters.base、app.channels.crypto、app.config。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import base64

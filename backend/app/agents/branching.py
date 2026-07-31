@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：员工范围与资源分支逻辑，统一处理整体员工、私有资源、广场资源及创建者元数据。
+
+主要入口：user_creator_metadata, metadata_preserving_creator, get_overall_agent, get_agent, is_overall_agent, require_overall_agent；主要协作模块：app.db.models、app.llm.model_config_resolver。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -104,6 +109,7 @@ def get_overall_agent(db: Session, tenant_id: str) -> AgentProfile | None:
     ).first()
 
 
+# 阅读提示：按租户和可选员工 ID 解析当前作用域；未指定时通常回落到整体员工。
 def get_agent(db: Session, tenant_id: str, agent_id: str | None) -> AgentProfile | None:
     if not agent_id:
         return None
@@ -463,6 +469,7 @@ def visible_skill(
     return project_skill_with_branch(skill, branch)
 
 
+# 阅读提示：集中计算员工可见工具，MCP 同步后的 Tool 也必须通过这里进入模型上下文。
 def visible_tool_rows(
     db: Session,
     tenant_id: str,
@@ -995,6 +1002,7 @@ def _runtime_model(
     return resolve_model_config_for_runtime(db, tenant_id, model.id)
 
 
+# 阅读提示：把整体员工的公开能力复制为目标员工的私有绑定，不复制运行状态。
 def copy_overall_scope_to_agent(db: Session, tenant_id: str, agent: AgentProfile) -> None:
     skills = db.exec(
         select(Skill).where(Skill.tenant_id == tenant_id, Skill.status == "published")

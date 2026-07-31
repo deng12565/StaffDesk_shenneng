@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：通用演示数据初始化，创建租户、模型、工具、MCP、技能和示例资源。
+
+主要入口：seed_demo_data；主要协作模块：app.agents.branching、app.config、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import sys

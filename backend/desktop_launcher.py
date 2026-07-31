@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：桌面版启动入口，准备运行环境、选择可用端口并管理本地服务与桌面窗口。
+
+主要入口：build_server_config, apply_runtime_env, port_in_use, find_available_port, preload_server_app, main。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import importlib

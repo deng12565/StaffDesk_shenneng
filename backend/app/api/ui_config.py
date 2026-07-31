@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：界面配置 API，为管理端和聊天端提供租户级品牌与显示设置。
+
+主要入口：UIConfigRead, UIConfigUpdateRequest, ui_config_read, get_or_create_ui_config, get_enterprise_ui_config, update_enterprise_ui_config；主要协作模块：app.db、app.db.models、app.security.auth。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field

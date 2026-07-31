@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：HTTP 工具、MCP Server、工具调用和测试结果的数据契约。
+
+主要类型：ToolExecutionPolicy, ToolCreateRequest, ToolUpdateRequest, ToolRead, ToolBucketRead, ToolCall。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any, Literal, Optional

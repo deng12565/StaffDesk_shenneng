@@ -89,5 +89,9 @@ def test_powershell_wrappers_delegate_to_cross_platform_cli() -> None:
 def test_powershell_launcher_accepts_newer_python_3_versions() -> None:
     script = (SCRIPTS_DIR / "dev.ps1").read_text(encoding="utf-8")
 
+    project_python = 'backend\\.venv\\Scripts\\python.exe'
+    assert project_python in script
+    assert script.index(project_python) < script.index("$env:PYTHON")
     assert 'Prefix = @("-3.11")' in script
     assert 'Prefix = @("-3")' in script
+    assert "catch {" in script

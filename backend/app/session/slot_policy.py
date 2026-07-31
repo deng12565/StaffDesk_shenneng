@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：槽位清理策略，移除路由阶段自动生成且不应跨阶段保留的消息字段。
+
+主要入口：strip_router_generated_message_slots。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping

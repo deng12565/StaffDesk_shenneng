@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：渠道命令与员工路由规则，处理帮助、切换、绑定和当前员工状态。
+
+主要入口：help_text, ChannelCommand, parse_command, mounted_agents, default_agent_id, agent_names；主要协作模块：app.channels.service_identity、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

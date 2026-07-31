@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：定时任务 API，分别为管理端和聊天端提供任务草稿、运行与归档操作。
+
+主要入口：list_enterprise_scheduled_tasks, create_enterprise_scheduled_task, list_enterprise_scheduled_task_runs_for_agent, get_enterprise_scheduled_task, update_enterprise_scheduled_task, archive_enterprise_scheduled_task；主要协作模块：app.db、app.db.models、app.scheduled_tasks.schema。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -44,6 +49,7 @@ def list_enterprise_scheduled_tasks(
     return [scheduled_task_read(row) for row in rows]
 
 
+# 阅读提示：管理端创建入口负责权限和请求转换，时间计算与执行位于 scheduled_tasks.service。
 @enterprise_router.post("", response_model=ScheduledTaskRead)
 def create_enterprise_scheduled_task(
     request: ScheduledTaskCreateRequest,

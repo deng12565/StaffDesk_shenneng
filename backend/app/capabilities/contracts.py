@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：能力提供方与 Agent 运行时之间的稳定数据契约。
+
+主要类型：CapabilityContext, GeneralSkillResourceRef, KnowledgeSearchQuery, KnowledgeScope, KnowledgeHit, KnowledgeSearchResult。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence

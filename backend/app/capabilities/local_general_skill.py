@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：本地通用技能能力适配器，把数据库记录转换为运行时技能包和资源引用。
+
+主要入口：GeneralSkillRuntimeSnapshot, LocalGeneralSkillCatalog, package_from_row, resource_ref_from_row, runtime_snapshot_from_package, local_runtime_snapshot；主要协作模块：app.agents.branching、app.capabilities.contracts、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：场景技能 API，处理技能版本、图结构、发布、复制、运行统计和流式生成。
+
+主要入口：skill_read, skill_version_read, list_skills, create_skill, get_skill, update_skill；主要协作模块：app.agents.branching、app.async_jobs、app.db。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import base64
@@ -634,6 +639,7 @@ def extract_skill_file(request: SkillFileExtractRequest) -> SkillFileExtractResp
     return SkillFileExtractResponse(filename=request.filename, text=text)
 
 
+# 阅读提示：同步蒸馏入口把自然语言流程转换成技能图；长任务优先使用对应流式接口。
 @router.post("/distill", response_model=SkillDistillResponse)
 def distill_skill(
     request: SkillDistillRequest,

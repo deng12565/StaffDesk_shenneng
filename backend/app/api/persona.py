@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：当前用户角色设定 API，读取和更新个性化资料。
+
+主要入口：PersonaRead, PersonaUpdateRequest, persona_read, get_persona, update_persona；主要协作模块：app.db、app.db.models、app.db.seed。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict

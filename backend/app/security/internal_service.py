@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：内部服务鉴权，用派生令牌保护仅供本进程工具调用的 API。
+
+主要入口：internal_service_token, require_internal_service；主要协作模块：app.config。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import hashlib

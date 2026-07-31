@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：工具幂等回放策略，计算调用签名并判断副作用工具能否复用历史结果。
+
+主要类型：ToolReplayPolicy；主要协作模块：app.tools.tool_schema。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json

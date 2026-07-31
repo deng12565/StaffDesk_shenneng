@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：通用技能 Python 运行环境管理，选择或创建隔离解释器并安装依赖。
+
+主要入口：GeneralSkillRuntimeError, ensure_runtime_python, runtime_environment；主要协作模块：app.config。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import os

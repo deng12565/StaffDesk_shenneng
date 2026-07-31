@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：进程内异步任务队列，为知识、技能、反馈和记忆等后台工作提供统一调度。
+
+主要入口：AsyncJob, AsyncJobQueue, enqueue_async_job, get_async_job_queue, shutdown_async_jobs；主要协作模块：app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -32,6 +37,7 @@ class AsyncJobQueue:
         self._jobs: dict[str, AsyncJob] = {}
         self._max_history = max_history
 
+    # 阅读提示：提交任务时只登记和排队；真正执行发生在线程池 worker 中。
     def enqueue(
         self,
         name: str,
@@ -101,6 +107,7 @@ class AsyncJobQueue:
 _default_queue = AsyncJobQueue()
 
 
+# 阅读提示：业务模块统一从这个门面提交后台任务，不直接持有全局队列实例。
 def enqueue_async_job(
     name: str,
     func: Callable[..., Any],

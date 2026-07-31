@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：渠道适配器公共协议与注册表，定义入站消息、发送和文本切分边界。
+
+主要入口：ChannelInbound, ChannelAdapter, ChannelReactionAdapter, register_channel_adapter, get_channel_adapter, channel_reaction_token；主要协作模块：app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass

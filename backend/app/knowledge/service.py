@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：知识领域服务，负责摄取、分块、向量检索、发现验证和引用组装。
+
+主要入口：IngestPayload, KnowledgeDiscoveryValidationError, KnowledgeDiscoveryConflictError, validate_discovered_skill, KnowledgeIngestCancelled, KnowledgeService；主要协作模块：app.db、app.db.models、app.knowledge.parser。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import base64
@@ -285,6 +290,7 @@ class KnowledgeService:
         self._finalize_cancelled_job(job, "入库任务已取消")
         return job
 
+    # 阅读提示：摄取主流程负责解析、分块、索引和状态落库，并持续检查取消请求。
     def run_ingest_job(self, job_id: str) -> None:
         with Session(engine) as db:
             service = KnowledgeService(db)
@@ -473,6 +479,7 @@ class KnowledgeService:
             )
             self._clear_embedded_content(job)
 
+    # 阅读提示：知识检索主入口，组合可见范围、查询召回、排序和引用元数据。
     def search(self, request: KnowledgeSearchRequest, model_config: ModelConfig | None = None) -> KnowledgeSearchResponse:
         with observed_span(
             "knowledge_span",

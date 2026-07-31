@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：多阶段 Agent 提示协议，把统一系统提示和阶段载荷渲染成模型消息。
+
+主要入口：unified_system_prompt, stage_payload, render_stage_user_message。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import copy

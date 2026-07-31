@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：模型配置创建、更新、读取和能力验证的数据契约。
+
+主要类型：ModelConfigCreateRequest, ModelConfigUpdateRequest, ModelConfigRead, ModelCapabilityTestResult, ModelConfigTestResponse。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any, Optional

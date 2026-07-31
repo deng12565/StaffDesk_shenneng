@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：员工身份提示词构建器，把员工档案和能力边界转换为模型上下文。
+
+主要类型：AgentIdentityPrompt；主要协作模块：app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import re

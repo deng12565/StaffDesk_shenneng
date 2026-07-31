@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：员工管理 API，编排员工资料、资源绑定、模型绑定和工作记录查询。
+
+主要入口：get_agent_scope, list_agents, create_agent, get_agent, get_agent_work_record, update_agent；主要协作模块：app.agents.schema、app.agents.branching、app.db。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -109,6 +114,7 @@ def list_agents(
     return [agent_read(row, bindings.get(row.id, []), row.id in used_agent_ids) for row in rows]
 
 
+# 阅读提示：创建员工后同时建立默认资源和模型作用域，阅读时继续跟进 branching 模块。
 @enterprise_router.post("", response_model=AgentProfileRead)
 def create_agent(
     request: AgentProfileCreateRequest,

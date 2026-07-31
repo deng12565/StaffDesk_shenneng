@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：channels 子系统的公共导出入口，调用方可从这里导入稳定接口；具体实现位于 「app.config」。
+
+主要入口：get_wechat_poll_manager, get_wecom_stream_manager, get_feishu_process_manager, get_dingtalk_stream_manager, channel_services_enabled, start_binding_ingress。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import logging

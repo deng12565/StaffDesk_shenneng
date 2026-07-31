@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：模型协议驱动层，适配 OpenAI、Anthropic 和 Gemini 的请求与流式响应。
+
+主要类型：ProtocolCallError, CancellationToken, ProtocolDriver, ChatCompletionsDriver, AnthropicMessagesDriver, GeminiGenerateContentDriver。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -53,6 +58,7 @@ class ChatCompletionsDriver:
     client: Any
     request_kind: str = "chat.completions"
 
+    # 阅读提示：OpenAI 兼容协议的非流式实现，调用方不应绕过 LLMClient 直接使用。
     def complete(self, request: dict[str, Any]) -> Any:
         _raise_if_cancelled(request)
         return self.client.chat.completions.create(**_wire_request(request))
@@ -79,6 +85,7 @@ class AnthropicMessagesDriver:
     client: Any
     request_kind: str = "anthropic.messages"
 
+    # 阅读提示：Anthropic Messages 协议适配点，把统一请求转换为供应商格式。
     def complete(self, request: dict[str, Any]) -> Any:
         _raise_if_cancelled(request)
         payload = _anthropic_request(request)
@@ -157,6 +164,7 @@ class GeminiGenerateContentDriver:
     model: str
     request_kind: str = "gemini.generate_content"
 
+    # 阅读提示：Gemini generateContent 协议适配点，把统一请求转换为供应商格式。
     def complete(self, request: dict[str, Any]) -> Any:
         _raise_if_cancelled(request)
         payload = _gemini_request(request)

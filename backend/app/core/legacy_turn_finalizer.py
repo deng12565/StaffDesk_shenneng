@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：旧版回合收尾器，统一生成最终回复、保存消息并触发后台任务。
+
+主要类型：LegacyTurnFinalizer；主要协作模块：app.db.models、app.session.session_schema、app.tools.tool_schema。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable

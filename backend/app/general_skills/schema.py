@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：通用技能导入、文件包、执行和选择结果的数据契约。
+
+主要类型：GeneralSkillFile, GeneralSkillImportRequest, GeneralSkillClawHubImportRequest, GeneralSkillPackageUploadRequest, GeneralSkillRead, GeneralSkillRunRequest。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any, Optional

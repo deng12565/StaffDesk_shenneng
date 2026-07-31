@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：企业微信长连接适配器与流管理器，处理帧归一化、连接维护和消息发送。
+
+主要入口：is_self_frame, normalize_wecom_frame, WeComStreamManager, WeComAdapter；主要协作模块：app.channels.adapters.base、app.channels.crypto、app.db。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import asyncio

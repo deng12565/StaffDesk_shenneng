@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：Agent 路由器，根据用户请求和会话状态选择技能、知识或直接响应路径。
+
+主要类型：Router；主要协作模块：app.core.context_projection、app.db.models、app.llm。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -24,6 +29,7 @@ PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "router_prompt.
 
 
 class Router:
+    # 阅读提示：只决定本回合走哪条能力路径，不直接执行知识、技能或工具。
     def decide(
         self,
         message: str,

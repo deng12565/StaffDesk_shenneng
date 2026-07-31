@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：定时任务领域服务，处理草稿识别、到期扫描、Agent 执行和运行记录。
+
+主要入口：scheduled_task_read, scheduled_task_run_read, create_scheduled_task, update_scheduled_task, detect_scheduled_task_draft, due_scheduled_tasks；主要协作模块：app.agents.branching、app.core、app.db。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import calendar
@@ -228,6 +233,7 @@ def update_scheduled_task(
     return row
 
 
+# 阅读提示：从聊天文本识别任务草稿，但不会在没有确认时直接创建任务。
 def detect_scheduled_task_draft(
     db: Session,
     tenant_id: str,
@@ -314,6 +320,7 @@ def due_scheduled_tasks(db: Session, now: datetime | None = None, limit: int = 1
     return claimed
 
 
+# 阅读提示：定时执行入口会创建独立会话回合并持久化运行结果。
 def execute_scheduled_task(
     db: Session,
     task: ScheduledTask,

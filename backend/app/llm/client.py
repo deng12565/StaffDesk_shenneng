@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：统一 LLM 客户端，解析模型配置并提供文本、JSON、流式和多模态调用。
+
+主要类型：LLMError, LLMClient；主要协作模块：app.config、app.db.models、app.llm.model_protocols。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import ast
@@ -136,6 +141,7 @@ class LLMClient:
             )
         )
 
+    # 阅读提示：普通文本调用门面，在这里统一应用模型配置、协议驱动、预算和观测。
     def generate_text(
         self,
         system_prompt: str,
@@ -239,6 +245,7 @@ class LLMClient:
                 raise LLMError(exc.code) from exc
             raise LLMError(_provider_failure_detail(self, exc)) from exc
 
+    # 阅读提示：流式文本门面，除增量输出外应保持与 generate_text 相同的请求策略。
     def generate_text_stream(
         self,
         system_prompt: str,
@@ -423,6 +430,7 @@ class LLMClient:
             self.driver = driver
         return driver
 
+    # 阅读提示：结构化输出门面，负责 JSON 约束、解析和失败归一化。
     def generate_json(
         self,
         system_prompt: str,

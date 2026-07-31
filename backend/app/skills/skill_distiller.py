@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：技能蒸馏器，把自然语言经验转换为可执行技能图并补齐运行约束。
+
+主要类型：SkillDistiller；主要协作模块：app.db.models、app.llm、app.skills.llm_limits。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -47,6 +52,7 @@ FINAL_RESPONSE_INSTRUCTION_SUFFIX = "给用户明确最终回复；无法闭环�
 
 
 class SkillDistiller:
+    # 阅读提示：同步技能蒸馏入口；提示词、反思和图结构修复都封装在本类内部。
     def distill(self, request: SkillDistillRequest, model_config: ModelConfig) -> SkillDistillResponse:
         return self._generate_response(request, model_config)
 

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：能力契约测试辅助工具，用于验证命名空间、结果结构和错误边界。
+
+主要入口：ContractViolation, assert_namespaced_extensions, assert_knowledge_search_result, assert_general_skill_package, assert_provider_error；主要协作模块：app.capabilities.contracts、app.capabilities.errors。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json

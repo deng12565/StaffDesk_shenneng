@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：运行时日志基础设施，使用有界队列、轮转文件和异常钩子保护主流程。
+
+主要入口：runtime_log_path, configure_runtime_logging, shutdown_runtime_logging。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import atexit

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：通用技能 API，处理导入、列表、详情、执行和员工范围绑定。
+
+主要入口：general_skill_read, import_general_skill, import_skillhub_skill, import_clawhub_skill, import_general_skill_package, list_general_skills；主要协作模块：app.agents.branching、app.capabilities.local_general_skill、app.db。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import base64
@@ -587,6 +592,7 @@ def delete_general_skill(
     return {"status": "deleted", "slug": slug}
 
 
+# 阅读提示：直接运行已导入通用技能的调试入口，不等同于场景技能状态机执行。
 @router.post("/{slug}/run", response_model=GeneralSkillRunResponse)
 def run_general_skill(
     slug: str,

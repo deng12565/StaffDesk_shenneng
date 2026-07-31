@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：模型 API 协议目录与选项规范化，校验端点并计算配置指纹。
+
+主要入口：ModelApiProtocol, available_model_protocols, resolve_api_protocol, normalize_chat_protocol_options, current_protocol_options, model_config_fingerprint。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import hashlib

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：飞书入站暂存服务，生成稳定账号键并保存可重放消息信封。
+
+主要入口：feishu_account_key, feishu_identity_scope, encode_replay_envelope, decode_replay_envelope, stage_feishu_inbound；主要协作模块：app.channels.adapters.base、app.channels.service_durable_inbox、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json

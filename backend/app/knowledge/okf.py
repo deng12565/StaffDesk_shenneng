@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：OKF 结构化知识处理，构建概念关系、检索概念并导入导出知识包。
+
+主要入口：ParsedOkfDocument, build_okf_for_document, upsert_concepts, selected_concept_cards, search_concepts, okf_citations_for_concepts；主要协作模块：app.db.models、app.knowledge.citations。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json

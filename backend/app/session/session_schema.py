@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：Agent 会话运行时契约，定义任务帧、路由决策、步骤结果和聊天请求响应。
+
+主要类型：TaskFrame, PendingTask, TaskUpdate, AwaitingInput, RouterDecision, KnowledgeQuery；主要协作模块：app.tools.tool_schema。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any, Literal, Optional

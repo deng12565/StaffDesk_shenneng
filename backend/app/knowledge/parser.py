@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：知识文档文本提取器，支持文本、HTML、PDF 和 DOCX 等格式。
+
+主要入口：KnowledgeParseError, extract_text。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import re

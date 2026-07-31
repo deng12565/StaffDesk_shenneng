@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：渠道入站消费服务，负责认领、幂等、绑定命令、路由和 Agent 回合执行。
+
+主要入口：current_processor_run_id, claim_staged_inbound, pause_binding_intake, resume_binding_intake, process_inbound, process_staged_inbound；主要协作模块：app.channels.adapters.base、app.channels.adapters.wechat、app.channels.service_autoroute。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import logging
@@ -704,6 +709,7 @@ def _normalize_compat(binding: ChannelBinding, raw: dict) -> ChannelInbound | No
     return adapter.normalize(raw)
 
 
+# 阅读提示：单条渠道消息的主入口，依次处理幂等、命令、身份、路由和 Agent 回合。
 def process_inbound(
     binding: ChannelBinding,
     msg: dict | ChannelInbound,
@@ -964,6 +970,7 @@ def process_inbound(
             return True
 
 
+# 阅读提示：消费已持久化的入站事件；失败可重试，因此内部步骤必须保持幂等。
 def process_staged_inbound(event_pk: str, *, db_engine=None) -> bool:
     """Claim and process a durable inbox row without re-registering the event."""
     use_engine = db_engine or engine
@@ -1065,6 +1072,7 @@ def wake_staged_inbound_worker() -> None:
     _staged_inbound_wake.set()
 
 
+# 阅读提示：后台循环只负责认领和调度，业务处理仍回到 process_staged_inbound。
 def run_staged_inbound_daemon(
     *,
     once: bool = False,

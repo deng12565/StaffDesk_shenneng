@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：能力注册表抽象，管理提供方绑定、耐久绑定和可复现快照。
+
+主要类型：CapabilityBinding, DurableCapabilityBinding, CapabilitySnapshot, CapabilityRegistry。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json
@@ -81,6 +86,7 @@ class CapabilityRegistry:
         """Mark startup registration complete; sealed registries cannot mutate."""
         self._sealed = True
 
+    # 阅读提示：注册阶段只收集提供方；seal 之后快照不可再被新绑定改变。
     def register(self, binding: CapabilityBinding[Any]) -> None:
         if self._sealed:
             raise RuntimeError("capability registry is sealed")
@@ -121,6 +127,7 @@ class CapabilityRegistry:
             )
         return rehydrator(binding)
 
+    # 阅读提示：为一次运行生成稳定能力快照，避免执行中途读取到漂移的注册状态。
     def snapshot(
         self,
         requested: set[str] | None = None,

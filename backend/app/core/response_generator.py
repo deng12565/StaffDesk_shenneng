@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：最终响应生成器，把运行结果、引用与错误转换为面向用户的回复。
+
+主要入口：public_error_detail, format_runtime_failure_reply, model_failure_suggestion, tool_failure_reply, ResponseGenerator；主要协作模块：app.core.context_projection、app.db.models、app.knowledge.citations。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import re
@@ -65,6 +70,7 @@ def tool_failure_reply(tool_result: ToolResult) -> str:
 
 
 class ResponseGenerator:
+    # 阅读提示：非流式最终回复入口，把内部结果和引用整理成用户可见文本。
     def generate(
         self,
         message: str,
@@ -107,6 +113,7 @@ class ResponseGenerator:
         except Exception as exc:
             return format_runtime_failure_reply("模型调用失败", exc, "LLM_ERROR", model_failure_suggestion(exc))
 
+    # 阅读提示：流式生成最终回复，同时维持与非流式结果相同的引用和错误策略。
     def generate_stream(
         self,
         message: str,

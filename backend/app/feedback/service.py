@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：反馈分析领域服务，调用模型生成结构化结论并汇总会话质量指标。
+
+主要入口：FeedbackAnalysisService, feedback_analysis_read, feedback_summary；主要协作模块：app.db.models、app.llm、app.llm.model_config_resolver。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import time

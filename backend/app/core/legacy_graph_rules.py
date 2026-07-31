@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：旧版技能图规则，负责节点选择、边条件和完成状态判断。
+
+主要类型：LegacyGraphRules。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable

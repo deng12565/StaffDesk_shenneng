@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：StaffDeck 持久化模型全集，定义租户、用户、员工、能力、会话、渠道和审计表。
+
+主要入口：utc_now, new_id, Tenant, User, UserAvatar, Skill。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime

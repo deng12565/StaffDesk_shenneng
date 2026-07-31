@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：模型输出 token 预算策略，按操作类型和模型配置计算安全上限。
+
+主要入口：operation_output_tokens。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 

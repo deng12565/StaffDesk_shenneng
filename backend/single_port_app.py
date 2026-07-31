@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：单端口部署入口，把后端 API、前端静态资源和 SPA 路由回退组合成一个 ASGI 应用。
+
+主要入口：FrontendStaticFiles, spa_index_response, site_chat_proxy, root_redirect, brand_icon, enterprise_app；主要协作模块：app.main。阅读时先从这些入口跟踪调用关系。
+"""
+
 import logging
 import os
 from pathlib import Path

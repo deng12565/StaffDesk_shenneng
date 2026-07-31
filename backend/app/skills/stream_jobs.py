@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：技能流式任务内存存储，维护事件、取消状态和任务归属。
+
+主要类型：SkillStreamEvent, SkillStreamJob, SkillStreamJobStore；主要协作模块：app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

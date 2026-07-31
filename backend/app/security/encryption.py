@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：通用秘密加解密工具，用应用密钥保护模型 API Key 等敏感字段。
+
+主要入口：encrypt_secret, decrypt_secret, mask_secret；主要协作模块：app.config。阅读时先从这些入口跟踪调用关系。
+"""
+
 import base64
 import hashlib
 

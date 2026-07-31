@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：模型配置 API，负责协议枚举、密钥加密存储、默认模型选择和连通性验证。
+
+主要入口：list_model_protocols, model_config_read, list_model_configs, create_model_config, update_model_config, set_default_model_config；主要协作模块：app.db、app.db.models、app.llm。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from dataclasses import replace
@@ -96,6 +101,7 @@ def list_model_configs(
     return [model_config_read(row) for row in rows]
 
 
+# 阅读提示：保存模型配置时加密 API Key；创建成功不代表服务已通过能力验证。
 @router.post("", response_model=ModelConfigRead)
 def create_model_config(
     request: ModelConfigCreateRequest,
@@ -236,6 +242,7 @@ def set_default_model_config(
     return model_config_read(row)
 
 
+# 阅读提示：验证入口会测试文本、流式和 JSON 能力，但不替代真实 AgentLoop 冒烟测试。
 @router.post(
     "/{config_id}/test",
     response_model=ModelConfigTestResponse,

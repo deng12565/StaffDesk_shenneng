@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：工具与 MCP Server 管理 API，负责工具配置、探测、发现、同步、绑定和测试。
+
+主要入口：tool_read, list_tools, list_tool_buckets, create_tool, probe_tool, get_tool；主要协作模块：app.agents.branching、app.config、app.db。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -579,6 +584,10 @@ def _infer_json_schema(value: Any) -> dict[str, Any]:
 
 # --------------------------------------------------------------------------- #
 # MCP Servers（工具集）
+#
+# 阅读主线：保存连接配置 -> discover 调远端 tools/list -> sync 将远端定义落成
+# 本地 Tool 行 -> AgentLoop 运行时按 Tool 名调用。MCPServer 是连接级资源，Tool
+# 是模型可见、可绑定员工、可执行权限检查的能力；两者不要当成同一张配置表。
 # --------------------------------------------------------------------------- #
 
 
@@ -644,6 +653,7 @@ def list_mcp_servers(
     return [mcp_server_read(row, db) for row in rows]
 
 
+# 阅读提示：这里只保存 MCP Server 连接；还需 discover 和 sync 才会产生模型可见的 Tool。
 @mcp_router.post("", response_model=MCPServerRead)
 def create_mcp_server(
     request: MCPServerCreateRequest,
@@ -791,6 +801,7 @@ def discover_mcp_tools(
     return response
 
 
+# 阅读提示：同步是 MCP 接入的持久化边界：远端工具定义在这里变成本地能力与员工绑定。
 @mcp_router.post("/{server_id}/sync", response_model=MCPSyncResponse)
 def sync_mcp_tools(
     server_id: str,
@@ -799,7 +810,11 @@ def sync_mcp_tools(
     agent_id: str | None = None,
     current_user: User = Depends(get_current_user),
 ) -> MCPSyncResponse:
-    """把发现到的工具落成 Tool 行（新建/更新 schema），可选择导入的子集。"""
+    """把发现到的工具落成 Tool 行（新建/更新 schema），可选择导入的子集。
+
+    discover 只是连接测试和预览；只有 sync 后，工具才进入 StaffDeck 的本地
+    能力、权限和员工绑定体系，进而能够出现在模型的可用工具列表中。
+    """
     row = _get_mcp_server(db, request.tenant_id, server_id)
     ensure_open_gallery_admin(request.tenant_id, current_user)
     connection = _server_connection(row)
@@ -822,6 +837,8 @@ def sync_mcp_tools(
             continue
         current = existing.get(tool.name)
         if current is None:
+            # 本地名称带 server 前缀，避免两个 MCP Server 都暴露 get_weather
+            # 之类的同名工具；config_json.tool 保留服务端真正接受的叶子名称。
             new_row = Tool(
                 tenant_id=row.tenant_id,
                 name=_scoped_tool_name(row.name, tool.name),

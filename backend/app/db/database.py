@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：数据库引擎、会话和 SQLite 迁移入口，兼容旧数据库的增量升级。
+
+主要入口：init_db, get_session；主要协作模块：app.config。阅读时先从这些入口跟踪调用关系。
+"""
+
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 import hashlib
@@ -63,6 +68,7 @@ _CHANNEL_ACCOUNT_KEY_MIGRATION_ID = "20260723_channel_account_key_v1"
 _FEISHU_CHANNEL_SCHEMA_MIGRATION_ID = "20260724_feishu_channel_schema_v1"
 
 
+# 阅读提示：数据库启动入口：建表、执行兼容迁移并确保旧 SQLite 可继续运行。
 def init_db() -> None:
     import app.db.models  # noqa: F401
 

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：HTTP GET 工具请求构建器，把工具参数安全合并到查询字符串。
+
+主要入口：prepare_get_request。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：渠道凭据加解密边界，基于应用密钥保护数据库中的渠道秘密。
+
+主要入口：encrypt_channel_secret, decrypt_channel_secret；主要协作模块：app.config。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import base64

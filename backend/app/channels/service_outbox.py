@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：渠道出站服务，负责耐久投递、重试、反应状态和目标绑定解析。
+
+主要入口：stage_channel_delivery, cleanup_channel_reactions_before_binding_delete, run_delivery_daemon, run_reaction_delivery_daemon, start_delivery_daemon, stop_delivery_daemon；主要协作模块：app.config、app.db、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import logging
@@ -126,6 +131,7 @@ def _find_active_binding_for_agent(db: Session, chat_session: ChatSession) -> Ch
     return None
 
 
+# 阅读提示：先把出站消息写入数据库，不在 Agent 请求线程内直接调用外部渠道。
 def stage_channel_delivery(db: Session, chat_session: ChatSession, message: Message) -> None:
     """把 assistant 回复登记为渠道 outbox 投递（随主事务提交，不单独 commit）。
 
@@ -652,6 +658,7 @@ def _reset_stuck_deliveries(db: Session, *, reaction_lane: bool = False) -> None
         db.commit()
 
 
+# 阅读提示：投递守护循环负责认领、发送和退避重试，并更新可审计状态。
 def run_delivery_daemon(
     *,
     once: bool = False,

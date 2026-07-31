@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""StaffDeck 后端模块：用于开发和测试的 stdio MCP 模拟服务器，实现最小 JSON-RPC 握手、工具发现与工具调用。
+
+主要入口：main。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json

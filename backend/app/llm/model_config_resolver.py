@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：模型配置解析器，按员工绑定、默认配置和验证场景生成不可变运行快照。
+
+主要入口：ResolvedModelConfig, resolve_model_config_for_runtime, resolve_model_config_for_verification, snapshot_model_config；主要协作模块：app.db.models、app.llm.model_protocols。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import copy

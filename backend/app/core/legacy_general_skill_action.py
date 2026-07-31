@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：旧版通用技能动作兼容层，封装选择、执行和流式事件回调。
+
+主要类型：LegacyGeneralSkillAction；主要协作模块：app.db.models、app.general_skills.schema、app.llm。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json

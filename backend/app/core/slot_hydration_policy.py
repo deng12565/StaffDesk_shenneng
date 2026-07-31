@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：槽位补全策略，从用户输入和模型结果中安全地更新技能槽位。
+
+主要类型：SlotHydrationPolicy；主要协作模块：app.db.models、app.session.session_schema。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from collections.abc import Callable

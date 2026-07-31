@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：记忆 API，按当前用户与员工可见范围列出或清理长期记忆。
+
+主要入口：list_memories, clear_my_memories；主要协作模块：app.db、app.db.models、app.memory.service。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query

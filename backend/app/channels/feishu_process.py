@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：飞书连接器子进程监督器，封装进程状态、日志和跨平台终止行为。
+
+主要类型：ConnectorState, ConnectorRecord, FeishuProcessSupervisor。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import multiprocessing

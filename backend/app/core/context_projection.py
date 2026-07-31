@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：模型上下文投影工具，把复杂运行时对象压缩为各阶段需要的稳定载荷。
+
+主要入口：compact_knowledge_context, compact_step_result, compact_conversation_context, compact_current_step, compact_step_skill_context, compact_router_decision；主要协作模块：app.core.conversation_context、app.knowledge.citations、app.llm.stage_protocol。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any

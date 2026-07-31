@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：FastAPI 应用装配入口，注册生命周期、健康检查和全部后端路由。
+
+主要入口：on_startup, on_shutdown, health；主要协作模块：app.api、app.async_jobs、app.channels。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from fastapi import FastAPI
@@ -50,6 +55,7 @@ app.add_middleware(
 )
 
 
+# 阅读提示：应用启动钩子：先初始化数据库和种子数据，再启动后台任务与渠道服务。
 @app.on_event("startup")
 def on_startup() -> None:
     init_db()
@@ -59,6 +65,7 @@ def on_startup() -> None:
     start_channel_services()
 
 
+# 阅读提示：应用关闭钩子：按相反顺序停止渠道、任务队列和日志线程，避免进程残留。
 @app.on_event("shutdown")
 def on_shutdown() -> None:
     stop_channel_services()

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：企业微信入站暂存服务，把长连接帧保存为可重放事件。
+
+主要入口：encode_wecom_replay_envelope, decode_wecom_replay_envelope, stage_wecom_inbound；主要协作模块：app.channels.adapters.base、app.channels.service_durable_inbox、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import json

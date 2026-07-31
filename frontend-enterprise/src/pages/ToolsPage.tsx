@@ -1420,6 +1420,8 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
   }
 
   async function discover() {
+    // 发现只调用远端 tools/list 并展示结果，不会让员工立刻获得这些工具。
+    // 未保存时用于验证草稿连接；已保存时后端还会标记哪些工具已经导入。
     const built = buildPayload();
     if (!built) return;
     setDiscovering(true);
@@ -1447,6 +1449,8 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
   }
 
   async function sync() {
+    // 同步会把选中的远端定义持久化为本地 Tool，并按当前 agent 范围建立绑定；
+    // 后续模型看到和调用的是这些 Tool 行，而不是直接读取 MCP Server 配置。
     if (!server) {
       notify.warning('请先保存 MCP 服务器，再同步工具');
       return;

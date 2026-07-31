@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：飞书 SDK 运行入口，把飞书事件归一化后写入渠道入站服务。
+
+主要入口：run_feishu_runtime；主要协作模块：app.channels.adapters.base、app.channels.crypto、app.channels.service_feishu_inbox。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import asyncio

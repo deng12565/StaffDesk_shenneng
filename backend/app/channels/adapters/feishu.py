@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：飞书渠道适配器，负责凭据校验、令牌缓存和出站消息发送。
+
+主要入口：FeishuSendError, FeishuPermanentError, FeishuTransientError, FeishuTokenProvider, validate_feishu_credentials, FeishuAdapter；主要协作模块：app.channels.adapters.base、app.channels.crypto、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import hashlib

@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：反馈分析 API，提供反馈汇总、会话明细和重新分析入口。
+
+主要入口：get_feedback_summary, list_feedback_sessions, get_feedback_session_detail, reanalyze_feedback；主要协作模块：app.api.chat、app.db、app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query

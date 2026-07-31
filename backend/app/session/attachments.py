@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：聊天附件解析与模型上下文转换，处理文本、PDF、图片和元数据。
+
+主要入口：parse_chat_attachment, attachment_context_lines, message_content_with_attachment_context, image_payloads_from_attachments, message_images_from_metadata, request_has_image_attachments；主要协作模块：app.db.models、app.session.session_schema。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import base64

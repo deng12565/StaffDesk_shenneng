@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：会话上下文构建器，按游标和轮次裁剪历史消息并维护摘要状态。
+
+主要入口：build_conversation_context。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 import math

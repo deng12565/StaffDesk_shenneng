@@ -1,0 +1,7 @@
+interface:
+  display_name: "StaffDeck 开发规范"
+  short_description: "遵循 StaffDeck 现有架构、代码规范与验证流程完成开发"
+  default_prompt: "使用 $develop-staffdeck 按现有架构和规范完成一个最小范围的 StaffDeck 代码改动。"
+
+policy:
+  allow_implicit_invocation: false

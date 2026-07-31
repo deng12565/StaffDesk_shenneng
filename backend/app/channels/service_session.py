@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：渠道会话归属服务，查找、创建、迁移和认领外部会话。
+
+主要入口：migrate_binding_session_account_key, adopt_orphan_channel_sessions, find_channel_session, find_or_create_channel_session；主要协作模块：app.db.models。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from sqlalchemy.exc import IntegrityError
@@ -76,6 +81,7 @@ def find_channel_session(
     ).first()
 
 
+# 阅读提示：用稳定外部账号键复用会话，避免不同 Bot 或绑定错误认领历史。
 def find_or_create_channel_session(
     db: Session,
     binding: ChannelBinding,

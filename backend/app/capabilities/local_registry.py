@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：本地能力注册表装配入口，把知识、通用技能和模型快照组合到当前租户。
+
+主要入口：build_local_capability_registry；主要协作模块：app.capabilities.contracts、app.capabilities.local_knowledge、app.capabilities.registry。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any

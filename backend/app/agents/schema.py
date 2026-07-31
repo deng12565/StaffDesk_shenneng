@@ -1,3 +1,8 @@
+"""StaffDeck 后端模块：员工、资源绑定和工作记录相关的请求响应数据契约。
+
+主要类型：AgentProfileCreateRequest, AgentProfileUpdateRequest, AgentResourceBindingRead, AgentProfileRead, AgentScopeRead, AgentWorkRecordReplyStatsRead。阅读时先从这些入口跟踪调用关系。
+"""
+
 from __future__ import annotations
 
 from typing import Any, Literal, Optional
