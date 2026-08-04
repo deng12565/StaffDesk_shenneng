@@ -2,22 +2,22 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档状态 | Draft / 待实现 |
-| 版本 | v1.0 |
-| 日期 | 2026-07-31 |
+| 文档状态 | Implemented / 已实现 |
+| 版本 | v1.1 |
+| 日期 | 2026-08-03 |
 | 目标系统 | StaffDeck 本地部署 |
-| MCP 传输方式 | stdio |
+| MCP 传输方式 | Streamable HTTP |
 
 ## 1. 背景
 
-OpenET（开放数字地球）聚合了常规数值预报、AI 气象预报、集合预报和历史观测数据，并通过 HTTP API 提供单点、多点和区域查询。当前 StaffDeck 已支持 MCP Server 的保存、工具发现、同步和员工绑定，但尚未提供 OpenET 专用 MCP。
+OpenET（开放数字地球）聚合了常规数值预报、AI 气象预报、集合预报和历史观测数据，并通过 HTTP API 提供单点、多点和区域查询。StaffDeck 已支持 MCP Server 的保存、工具发现、同步和员工绑定，并在现有 FastAPI 服务中提供 OpenET 专用 MCP HTTP 路由。
 
-本项目将 OpenET API 封装为一个本地 stdio MCP Server，使 StaffDeck 可以发现并按需使用气象数据工具。第一阶段只建设 MCP 能力层，不定义后续 agent 的服务对象、业务职责、提示词或回复风格。
+本项目将 OpenET API 封装为同端口 Streamable HTTP MCP Server，使 StaffDeck 可以发现并按需使用气象数据工具。第一阶段只建设 MCP 能力层，不定义后续 agent 的服务对象、业务职责、提示词或回复风格。
 
 ## 2. 产品目标
 
 1. 将当前 OpenET 订阅允许使用的开源数据集封装为结构清晰、可约束的 MCP 工具。
-2. 让 StaffDeck 能通过现有 MCP 管理能力保存连接并发现工具，无需新增常驻端口。
+2. 让 StaffDeck 能通过现有 MCP 管理能力保存连接并发现工具，无需新增独立进程或监听端口。
 3. 对坐标、变量数、时间跨度和返回规模设置明确上限，避免无界查询消耗 API 额度或 agent 上下文。
 4. 统一 OpenET 数据和错误格式，使调用方不必理解各数据集的原始响应差异。
 5. 默认根据查询类型、时间跨度和业务目标自动选择数据集，同时允许专家显式覆盖。
@@ -33,7 +33,7 @@ OpenET（开放数字地球）聚合了常规数值预报、AI 气象预报、�
 - 不提供 TQAI 数据集、ECMWF 商业数据集或其他超出当前订阅的内容。
 - 不提供 NetCDF 数据推送、批量导出或长期离线数据仓库。
 - 不开放未经聚合的区域网格结果。
-- 不新增远程 MCP 服务、HTTP 监听端口、容器或第三方依赖。
+- 不新增远程 MCP 服务、独立 HTTP 监听端口、容器或第三方依赖。
 - 不自动把工具同步到 StaffDeck 公共工具广场或绑定给任何员工。
 
 ## 4. 用户与使用场景
@@ -96,7 +96,7 @@ MCP 内的数据集目录必须版本化维护。实际实现前应再次对照 
 ```mermaid
 flowchart LR
     A[StaffDeck AgentLoop] --> B[StaffDeck MCP Client]
-    B -->|stdio JSON-RPC| C[OpenET MCP Server]
+    B -->|Streamable HTTP JSON-RPC| C[OpenET MCP Server]
     C --> F[确定性数据集选择器]
     F -->|HTTPS + token header| D[OpenET API]
     E[backend/.env] -->|OPENET_API_TOKEN| C
@@ -105,11 +105,12 @@ flowchart LR
 
 ### 6.1 部署约束
 
-- MCP Server 运行于 StaffDeck 后端现有 Python 3.11 虚拟环境。
-- MCP Server 使用 stdio 与 StaffDeck 通信，不监听 TCP 端口。
+- MCP Server 作为 `/api/mcp/openet` 路由运行于 StaffDeck 现有 FastAPI 进程。
+- MCP Server 复用 StaffDeck 当前监听端口，不启动额外进程或 TCP 端口。
 - 上游请求使用项目已有 HTTP 客户端能力，不新增 Python 包。
 - StaffDeck MCP 连接中的 `headers` 和 `env` 必须为空，不保存 token。
-- MCP 进程从工作目录 `E:\TLong\StaffDeck\backend` 下的 `.env` 读取 `OPENET_API_TOKEN`。
+- StaffDeck MCP Client 仅对配置的内部 OpenET URL 自动注入由 `APP_SECRET` 派生的内部鉴权头；该值不写入数据库。
+- FastAPI 进程从 `backend/.env` 读取 `OPENET_API_TOKEN`。
 
 ### 6.2 计划连接配置
 
@@ -117,14 +118,13 @@ flowchart LR
 | --- | --- |
 | 名称 | `openet` |
 | 展示名称 | `OpenET 气象数据` |
-| Transport | `stdio` |
-| Command | `E:\TLong\StaffDeck\backend\.venv\Scripts\python.exe` |
-| Args | `-m`、OpenET MCP 服务模块名 |
-| CWD | `E:\TLong\StaffDeck\backend` |
+| Transport | `streamable_http` |
+| URL | `${TOOL_BASE_URL}/api/mcp/openet` |
+| Command / Args / CWD | 空 |
 | Env JSON | `{}` |
 | Headers JSON | `{}` |
 
-模块名由实现阶段按现有后端包结构确定，但不得把 token 作为命令行参数或 stdio 配置参数传递。
+`TOOL_BASE_URL` 由当前启动模式提供，单端口默认是 `http://localhost:5173`，双进程模式默认指向后端端口。不得把 OpenET token 或内部鉴权值写入 URL、命令行或 MCP 配置。
 
 ### 6.3 数据集自动选择
 
@@ -348,9 +348,9 @@ OpenET 业务失败可能仍返回 HTTP 200。MCP 必须同时检查 HTTP 状态
    ```
 
 2. 可在 `.env.example` 中增加空的 `OPENET_API_TOKEN=` 作为配置说明，但不得写入真实值。
-3. MCP Server 自行从 `.env` 加载 token；StaffDeck MCP `Env JSON` 和 `Headers JSON` 保持为空。
-4. token 不得通过命令行参数传递，以免出现在进程列表中。
-5. stdout 只输出 MCP JSON-RPC 消息，不输出调试信息；stderr 日志不得包含 token 或完整 header。
+3. FastAPI 进程从 `.env` 加载 token；StaffDeck MCP `Env JSON` 和 `Headers JSON` 保持为空。
+4. token 不得通过 URL、请求参数或命令行传递。
+5. MCP HTTP 响应和应用日志不得包含 token 或完整鉴权 header。
 6. `NEXT_AGENT_HANDOFF.md` 只记录配置键名、连接方式和验证结果，不记录 token。
 7. 验收时以只输出命中数量和文件路径的方式扫描数据库、日志及 Git 变更，禁止在终端回显 token 本身。
 
@@ -407,7 +407,7 @@ OpenET 官方对不同类型查询采用不同的调用次数计算方式。MCP 
 
 ### 13.3 StaffDeck 验收
 
-- StaffDeck 能保存 stdio MCP 连接。
+- StaffDeck 能保存并调用 `streamable_http` MCP 连接。
 - “发现工具”能列出全部 7 个工具及其输入 Schema。
 - MCP 配置的 `headers` 和 `env` 为空。
 - OpenET 尚未绑定员工时，员工工具管理页仍显示该 MCP Server，并标记当前员工的工具数为 0。
@@ -419,17 +419,17 @@ OpenET 官方对不同类型查询采用不同的调用次数计算方式。MCP 
 
 ### 14.1 发布
 
-1. 合入 MCP Server、测试和空配置示例。
+1. 合入 MCP HTTP 路由、内部鉴权、测试和空配置示例。
 2. 用户在本地 `backend/.env` 添加 token。
-3. 重启 StaffDeck，使新配置对 MCP 子进程可见。
-4. 保存 MCP 连接并执行发现。
+3. 重启 StaffDeck，使 HTTP MCP 路由和配置生效。
+4. 将 `openet` Server 更新为 `${TOOL_BASE_URL}/api/mcp/openet` 并执行发现。
 5. 完成真实 API 冒烟测试和敏感信息扫描。
 
 ### 14.2 回退
 
 - 从 StaffDeck 删除 `openet` MCP Server 配置。
 - 删除或清空本地 `OPENET_API_TOKEN`。
-- 回退 MCP Server 代码与空配置示例。
+- 禁用或删除 `openet` MCP Server，并回退 MCP HTTP 路由代码与空配置示例。
 - 若已同步工具，先解除员工私有绑定，再删除 OpenET Tool 行；不要影响其他工具或员工资源。
 
 ## 15. 后续阶段

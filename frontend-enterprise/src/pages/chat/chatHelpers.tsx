@@ -1040,15 +1040,40 @@ export function knowledgeTraceDetail(data: Record<string, unknown>): string | un
 }
 
 export function knowledgeResultTraceDetail(data: Record<string, unknown>): string | undefined {
+  const knowledgeBaseNames = traceItemNames(data.knowledge_bases, 'name');
+  const documentNames = traceItemNames(data.selected_documents, 'title', 'filename');
   const concepts = Array.isArray(data.selected_concepts) ? data.selected_concepts.length : 0;
+  const buckets = Array.isArray(data.selected_buckets) ? data.selected_buckets.length : 0;
   const chunks = Array.isArray(data.chunks) ? data.chunks.length : 0;
   const evidence = Array.isArray(data.evidence_pack) ? data.evidence_pack.length : 0;
   const parts = [
+    knowledgeBaseNames.length ? `知识库：${traceNameSummary(knowledgeBaseNames)}` : '',
+    documentNames.length ? `文档：${traceNameSummary(documentNames)}` : '',
     concepts ? `命中知识图谱 ${concepts} 个` : '',
+    buckets ? `展开 ${buckets} 个知识桶` : '',
     chunks ? `读取 ${chunks} 个片段` : '',
     evidence ? `生成 ${evidence} 条引用候选` : '',
   ].filter(Boolean);
   return parts.length ? parts.join(' · ') : undefined;
+}
+
+function traceItemNames(value: unknown, ...keys: string[]): string[] {
+  if (!Array.isArray(value)) return [];
+  const names: string[] = [];
+  value.forEach((item) => {
+    if (!isPlainRecord(item)) return;
+    const name = keys
+      .map((key) => item[key])
+      .find((candidate): candidate is string => typeof candidate === 'string' && Boolean(candidate.trim()))
+      ?.trim();
+    if (name && !names.includes(name)) names.push(name);
+  });
+  return names;
+}
+
+function traceNameSummary(names: string[], limit = 3): string {
+  const visible = names.slice(0, limit).join('、');
+  return names.length > limit ? `${visible} 等 ${names.length} 个` : visible;
 }
 
 export function normalizeTraceSkill(value: unknown): TraceSkill | null {
@@ -1167,7 +1192,7 @@ export function routerDecisionTraceLine(data: Record<string, unknown>): TraceLin
   const decision = typeof data.decision === 'string' ? data.decision.trim() : '';
   const skillId = typeof data.target_skill_id === 'string' ? data.target_skill_id.trim() : '';
   const stepId = typeof data.target_step_id === 'string' ? data.target_step_id.trim() : '';
-  const reason = typeof data.reason === 'string' ? data.reason.trim() : '';
+  const reason = publicRouterDecisionReason(typeof data.reason === 'string' ? data.reason : '');
   const detail = [reason, skillId ? `目标SOP ${skillId}` : '', stepId ? `目标节点 ${stepId}` : '']
     .filter(Boolean)
     .join(' · ');
@@ -1179,6 +1204,14 @@ export function routerDecisionTraceLine(data: Record<string, unknown>): TraceLin
     state: 'completed',
     icon: 'judge',
   };
+}
+
+export function publicRouterDecisionReason(reason: string): string {
+  const normalized = reason.trim().replace(/\s+/g, ' ');
+  if (normalized.startsWith('No published scene skills are available;')) {
+    return '未匹配到业务流程，继续使用可用知识和工具处理。';
+  }
+  return reason.trim();
 }
 
 export function stepResultTraceLine(data: Record<string, unknown>): TraceLine {

@@ -446,6 +446,7 @@ function Shell({
         },
       );
       await loadAgents();
+      window.dispatchEvent(new Event("ultrarag-enterprise-agent-scope-refresh"));
       changeAgentScope(created.id);
       setAgentCreateOpen(false);
       notify.success("数字员工创建成功");

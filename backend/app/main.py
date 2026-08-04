@@ -35,15 +35,16 @@ from app.config import get_settings
 from app.db import engine, init_db
 from app.db.seed import seed_demo_data
 from app.scheduled_tasks.worker import start_background_worker, stop_background_worker
+from app.tools.openet_mcp.http import router as openet_mcp_router
 
 settings = get_settings()
 
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
-    docs_url=None,
+    docs_url="/docs",
     redoc_url=None,
-    openapi_url=None,
+    openapi_url="/openapi.json",
 )
 
 app.add_middleware(
@@ -102,3 +103,4 @@ app.include_router(tools.mcp_router)
 app.include_router(sessions.router)
 app.include_router(traces.router)
 app.include_router(mock.router)
+app.include_router(openet_mcp_router)

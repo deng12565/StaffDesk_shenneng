@@ -1,4 +1,10 @@
-"""OpenET tool contracts, deterministic selection, validation, and HTTP access."""
+"""OpenET MCP 的业务服务、内部地点解析、数据集选择和响应归一化。
+
+真实调用链：``tools/call`` -> ``OpenETService.call`` -> 参数校验 -> 可选的
+``LocationResolver``/Nominatim HTTP -> 后端确定性数据集选择 -> OpenET HTTP ->
+统一结构化结果。LLM 只选择公开工具并提供参数，不直接调用 Nominatim，也不在
+``dataset=auto`` 时决定最终数据集。
+"""
 
 from __future__ import annotations
 
@@ -33,7 +39,11 @@ TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 _TIME_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 
 
+# ========== 1. 结构化错误、凭据读取与 OpenET 上游客户端 ==========
+
+
 class OpenETMCPError(RuntimeError):
+    """可安全返回给 MCP 调用方的领域错误。"""
     def __init__(
         self,
         code: str,
@@ -58,7 +68,7 @@ class OpenETMCPError(RuntimeError):
 
 
 def load_openet_token(env_file: Path | None = None) -> str:
-    """Read the token from the backend dotenv file, never from MCP config."""
+    """只从后端 .env 读取 token，不从 MCP 配置或工具参数接收凭据。"""
     selected = env_file or Path(os.environ.get("ULTRARAG_DOTENV", ".env"))
     try:
         value = dotenv_values(selected).get("OPENET_API_TOKEN")
@@ -68,6 +78,7 @@ def load_openet_token(env_file: Path | None = None) -> str:
 
 
 class OpenETClient:
+    """OpenET HTTP 边界：一次工具调用只请求一个已选定的数据集。"""
     def __init__(
         self,
         *,
@@ -82,6 +93,7 @@ class OpenETClient:
         self._transport = transport
 
     def query(self, dataset: str, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """发出单次上游请求，并将 HTTP/业务错误转换为结构化 MCP 错误。"""
         if not self._token:
             raise OpenETMCPError(
                 "AUTH_MISSING",
@@ -149,6 +161,11 @@ class OpenETClient:
         return data
 
 
+# ========== 2. 内部地点解析：地点名称 -> 经度/纬度 ==========
+#
+# LocationResolver 由 OpenETService 在需要单点坐标时直接调用 Nominatim HTTP。
+# 它不经过 StaffDeck ToolExecutor，也不作为工具定义暴露给模型。
+
 @dataclass(frozen=True)
 class ResolvedLocation:
     query: str
@@ -168,7 +185,7 @@ class ResolvedLocation:
 
 
 class LocationResolver:
-    """Resolve human-readable places while keeping coordinates out of user interactions."""
+    """解析用户可读地点，同时让经纬度细节留在 MCP 内部。"""
 
     def __init__(
         self,
@@ -184,6 +201,7 @@ class LocationResolver:
         self._transport = transport
 
     def resolve(self, query: str) -> ResolvedLocation:
+        """解析并校验唯一中国地点；无结果或歧义时返回明确错误而不猜测。"""
         normalized = str(query or "").strip()
         if not normalized:
             raise OpenETMCPError("VALIDATION_ERROR", "location must be a non-empty string.")
@@ -293,6 +311,9 @@ def _sanitize_message(message: str, token: str = "") -> str:
     return result[:500]
 
 
+# ========== 3. MCP 叶子工具分发与查询编排 ==========
+
+
 @dataclass(frozen=True)
 class Selection:
     requested_dataset: str
@@ -302,6 +323,7 @@ class Selection:
 
 
 class OpenETService:
+    """7 个公开 MCP 工具共享的业务入口。"""
     def __init__(
         self,
         client: OpenETClient | None = None,
@@ -314,6 +336,7 @@ class OpenETService:
         self._location_resolver = location_resolver or LocationResolver()
 
     def call(self, tool_name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        """按 MCP 叶子工具名分发；未知工具不会转发到上游。"""
         args = dict(arguments or {})
         handlers: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
             "list_datasets": self._list_datasets,
@@ -491,6 +514,7 @@ class OpenETService:
     def _resolve_point(
         self, args: dict[str, Any]
     ) -> tuple[tuple[float, float], ResolvedLocation | None]:
+        """优先解析 location；已有坐标的系统调用仍可直接传 lon/lat。"""
         location = args.get("location")
         has_coordinates = args.get("lon") is not None or args.get("lat") is not None
         if location is not None:
@@ -630,6 +654,11 @@ class OpenETService:
         goal: str = "general",
         history_end: datetime | None = None,
     ) -> Selection:
+        """校验显式数据集，或按本地规则解析 ``dataset=auto``。
+
+        自动选择只依赖查询类别、目标、时效、变量和范围；它不会再次请求 LLM，
+        也不会扇出调用多个模型。返回第一个兼容候选并保留备选项用于解释。
+        """
         if requested_dataset != "auto":
             dataset = DATASETS.get(requested_dataset)
             if dataset is None:
@@ -726,6 +755,9 @@ class OpenETService:
         return ["gfs_surface", "ifs_surface", "icon_surface"], (
             "General forecasts use NOAA GFS by default."
         )
+
+
+# ========== 4. 工具参数的确定性校验 ==========
 
 
 def _compatible(dataset: DatasetSpec, variables: list[str], horizon: int | None) -> bool:
@@ -864,6 +896,11 @@ def _ensemble_set(value: object) -> list[str]:
     return result
 
 
+# ========== 5. OpenET 上游响应归一化 ==========
+#
+# 不把上游 JSON 原样透传给模型：这里统一变量顺序、单位、集合统计、地点、
+# 时间窗口和截断信息，并拒绝字段数量不一致或缺失数据的响应。
+
 def _normalize_response(
     payload: dict[str, Any],
     *,
@@ -877,6 +914,7 @@ def _normalize_response(
     ensemble_set: list[str] | None = None,
     require_single_series: bool = False,
 ) -> dict[str, Any]:
+    """将各查询端点的响应转换成所有 MCP 查询工具共享的结果结构。"""
     blocks: list[tuple[str | None, dict[str, Any]]] = []
     if ensemble_set and any(isinstance(payload.get(item), dict) for item in ensemble_set):
         if not all(isinstance(payload.get(item), dict) for item in ensemble_set):
@@ -1255,6 +1293,11 @@ def _time_indices(
     local_end = local_start + timedelta(hours=horizon_hours)
     return [index for index, value in enumerate(parsed) if local_start <= value <= local_end]
 
+
+# ========== 6. 模型可见的 MCP 工具定义 ==========
+#
+# StaffDeck 在同步 MCP Server 时通过 tools/list 读取这些 schema，并将
+# ``openet.<叶子名称>`` 保存为本地 Tool；运行时再用 config_json.tool 还原叶子名。
 
 def _object_schema(properties: dict[str, Any], required: list[str]) -> dict[str, Any]:
     return {

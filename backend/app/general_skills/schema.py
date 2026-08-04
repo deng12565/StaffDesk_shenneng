@@ -95,6 +95,8 @@ class GeneralSkillRunResponse(BaseModel):
 
 
 class GeneralSkillSelection(BaseModel):
+    """能力选择模型的结构化结果；仅表达意图，不授予工具执行权限。"""
+
     use_tool: bool = False
     tool_call: Optional[ToolCall] = None
     use_general_skill: bool = False

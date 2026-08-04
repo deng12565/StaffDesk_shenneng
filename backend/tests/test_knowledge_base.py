@@ -18,6 +18,7 @@ from app.api.knowledge import (
     update_document,
 )
 from app.api.knowledge_bases import knowledge_base_read
+from app.core.legacy_knowledge_action import LegacyKnowledgeAction
 from app.db.models import (
     AgentProfile,
     KnowledgeBase,
@@ -57,6 +58,7 @@ from app.knowledge.service import (
 from app.llm import LLMClient
 from app.observability.spans import bind_span_sink
 from app.skills.skill_schema import SkillCard
+from app.session.session_schema import KnowledgeQuery
 
 
 def test_skill_card_rejects_legacy_steps_and_accepts_graph() -> None:
@@ -105,6 +107,35 @@ def test_skill_card_rejects_legacy_steps_and_accepts_graph() -> None:
     assert [node.node_id for node in card.nodes] == ["collect", "reply"]
     assert card.edges[0].source_node_id == "collect"
     assert card.edges[0].next_node_id == "reply"
+
+
+def test_knowledge_response_items_include_used_knowledge_base_names() -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.add(
+            KnowledgeBase(
+                id="kb_travel",
+                tenant_id="tenant_demo",
+                name="差旅制度",
+            )
+        )
+        db.commit()
+
+        payload = LegacyKnowledgeAction(db).response_items(
+            KnowledgeQuery(query="差旅报销"),
+            "差旅费怎么报销？",
+            KnowledgeSearchResponse(
+                selected_documents=[
+                    {
+                        "id": "doc_travel",
+                        "knowledge_base_id": "kb_travel",
+                        "title": "差旅报销办法",
+                    }
+                ]
+            ),
+        )
+
+        assert payload["knowledge_bases"] == [{"id": "kb_travel", "name": "差旅制度"}]
 
 
 def test_knowledge_ingest_creates_document_buckets_and_chunks_without_auto_discovery() -> None:

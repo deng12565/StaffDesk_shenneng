@@ -1,8 +1,7 @@
-"""Versioned OpenET dataset and variable capability catalog.
+"""版本化的 OpenET 数据集与变量能力目录。
 
-The entries were checked against the official OpenET documentation on
-2026-07-31. The catalog is deliberately local so dataset discovery and
-selection never spend upstream query quota.
+目录内容在 2026-07-31 对照 OpenET 官方文档核验。目录刻意保存在本地，
+因此 ``list_datasets``、``describe_dataset`` 和自动选择候选都不消耗上游额度。
 """
 
 from __future__ import annotations
@@ -15,6 +14,9 @@ CATALOG_VERSION = "2026-07-31"
 CATALOG_SOURCE = "https://doc.terraqt.com/s/openet/doc/5pww5o2u5oc76kei-2luiF7Vom6"
 
 DatasetCategory = Literal["forecast", "ensemble", "history"]
+
+
+# ========== 1. 目录数据结构 ==========
 
 
 @dataclass(frozen=True)
@@ -73,6 +75,9 @@ class DatasetSpec:
             "supports_multi_point": self.supports_multi_point,
             "supports_area_average": self.supports_area_average,
         }
+
+
+# ========== 2. 变量名称、默认单位和可转换单位注册表 ==========
 
 
 def _names(value: str) -> tuple[str, ...]:
@@ -252,6 +257,11 @@ for _prefix in ("t", "u", "v", "ws", "wd", "w", "q", "gh"):
 _graphcast_variables.extend(("tcc", "lcc", "mcc", "hcc"))
 
 
+# ========== 3. 首版允许使用的数据集白名单 ==========
+#
+# OpenETService 只会从这里选择数据集；即使 LLM 或调用方传入其他名称，
+# 服务层也会拒绝，避免绕过开源数据集和查询能力边界。
+
 DATASETS: dict[str, DatasetSpec] = {
     "gfs_surface": DatasetSpec(
         "gfs_surface", "NOAA GFS", "forecast", "0.25 degree", "1h to 120h, then 3h",
@@ -329,6 +339,9 @@ DATASETS: dict[str, DatasetSpec] = {
         _variables(_GFS_VARIABLES), data_delay="about 1 day", data_delay_hours=24,
     ),
 }
+
+
+# ========== 4. 服务层使用的目录查询辅助函数 ==========
 
 
 def base_variable_name(requested_name: str) -> str:

@@ -5,7 +5,7 @@ import { cn } from '@/lib/utils';
 import IconPlus from '../assets/icons/plus.svg?react';
 import IconSearch from '../assets/icons/search.svg?react';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { api, TENANT_ID } from '../api/client';
@@ -53,7 +53,7 @@ export default function AgentsPage({
   );
   const navigate = useNavigate();
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const rows = await api.get<AgentProfileRead[]>(`/api/enterprise/agents?tenant_id=${TENANT_ID}`);
@@ -63,11 +63,19 @@ export default function AgentsPage({
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
   useEffect(() => {
     void load();
-  }, []);
+  }, [load]);
+
+  useEffect(() => {
+    const handleAgentRefresh = () => {
+      void load();
+    };
+    window.addEventListener('ultrarag-enterprise-agent-scope-refresh', handleAgentRefresh);
+    return () => window.removeEventListener('ultrarag-enterprise-agent-scope-refresh', handleAgentRefresh);
+  }, [load]);
 
   useEffect(() => {
     const handler = (event: Event) => {

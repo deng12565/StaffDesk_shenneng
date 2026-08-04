@@ -15,15 +15,17 @@ import time
 from collections.abc import Mapping
 from contextlib import suppress
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
+from app.config import get_settings
+from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_service_token
 from app.tools.mcp_builtin import (
     BuiltinMCPError,
     builtin_mcp_tool_definitions,
     execute_builtin_mcp,
 )
-
 
 # 阅读入口：上层只调用 execute_mcp_tool/list_mcp_tools；本文件再按 transport
 # 选择会话实现。每个会话都遵循 initialize -> initialized 通知 -> tools/list
@@ -294,6 +296,8 @@ class _HttpSession(_MCPSession):
         }
         if self._session_id:
             headers["Mcp-Session-Id"] = self._session_id
+        if _is_internal_openet_url(self._endpoint()):
+            headers[INTERNAL_SERVICE_HEADER] = internal_service_token()
         return headers
 
     def _request(self, method: str, params: dict[str, Any]) -> Any:
@@ -340,6 +344,26 @@ def _parse_http_mcp_response(response: httpx.Response) -> Any:
         return response.json()
     except Exception as exc:
         raise MCPClientError(f"HTTP MCP 响应解析失败：{exc}") from exc
+
+
+def _is_internal_openet_url(url: str) -> bool:
+    target = urlsplit(url)
+    if target.path.rstrip("/") != "/api/mcp/openet":
+        return False
+    configured = urlsplit(get_settings().normalized_tool_base_url)
+    return (
+        target.scheme.lower(),
+        target.hostname,
+        target.port or _default_http_port(target.scheme),
+    ) == (
+        configured.scheme.lower(),
+        configured.hostname,
+        configured.port or _default_http_port(configured.scheme),
+    )
+
+
+def _default_http_port(scheme: str) -> int | None:
+    return 443 if scheme.lower() == "https" else 80 if scheme.lower() == "http" else None
 
 
 # --------------------------------------------------------------------------- #
@@ -503,6 +527,8 @@ def _read_response(
 ) -> dict[str, Any]:
     if proc.stdout is None:
         raise MCPClientError("MCP stdio stdout 不可用。")
+    # Windows 的 subprocess stdout 是匿名管道，selectors/select 只支持 socket；
+    # 因此使用后台阻塞读取 + Queue 保留同样的超时语义。
     if os.name == "nt":
         return _read_response_from_windows_pipe(proc, expected_id, timeout_seconds)
     selector = selectors.DefaultSelector()
@@ -535,7 +561,7 @@ def _read_response_from_windows_pipe(
     expected_id: int,
     timeout_seconds: float,
 ) -> dict[str, Any]:
-    """Read a Windows subprocess pipe without select(), which only supports sockets."""
+    """读取 Windows 子进程管道；该平台的 select() 只能等待 socket。"""
     responses: queue.Queue[dict[str, Any] | BaseException | None] = queue.Queue(maxsize=1)
 
     def read_until_match() -> None:

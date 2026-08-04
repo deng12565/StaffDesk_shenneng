@@ -9,9 +9,9 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from typing import Any
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
-from app.db.models import ChatSession, ModelConfig, Skill, Tool
+from app.db.models import ChatSession, KnowledgeBase, ModelConfig, Skill, Tool
 from app.general_skills.schema import GeneralSkillSelection
 from app.knowledge.schema import KnowledgeSearchRequest, KnowledgeSearchResponse
 from app.session.session_schema import (
@@ -440,8 +440,8 @@ class LegacyKnowledgeAction:
             str(chat_session.active_step_id or ""),
         )
 
-    @staticmethod
     def response_items(
+        self,
         query: KnowledgeQuery,
         source_message: str,
         response: KnowledgeSearchResponse,
@@ -451,6 +451,7 @@ class LegacyKnowledgeAction:
         return {
             "query": query.model_dump(mode="json"),
             "source_message": None if runtime_forced else source_message,
+            "knowledge_bases": self._knowledge_base_refs(response),
             "selected_buckets": [
                 item.model_dump(mode="json") for item in response.selected_buckets
             ],
@@ -463,11 +464,56 @@ class LegacyKnowledgeAction:
             "evidence_pack": response.evidence_pack,
         }
 
+    def _knowledge_base_refs(
+        self, response: KnowledgeSearchResponse
+    ) -> list[dict[str, str]]:
+        if self.db is None:
+            return []
+
+        knowledge_base_ids: list[str] = []
+
+        def add(value: object) -> None:
+            knowledge_base_id = str(value or "").strip()
+            if knowledge_base_id and knowledge_base_id not in knowledge_base_ids:
+                knowledge_base_ids.append(knowledge_base_id)
+
+        for item in response.selected_documents:
+            if isinstance(item, dict):
+                add(item.get("knowledge_base_id"))
+        for item in response.selected_concepts:
+            if isinstance(item, dict):
+                add(item.get("knowledge_base_id"))
+        for item in response.selected_buckets:
+            add(item.knowledge_base_id)
+        for item in response.chunks:
+            add(item.knowledge_base_id)
+        for collection in (
+            response.expanded_sections,
+            response.okf_citations,
+            response.evidence_pack,
+        ):
+            for item in collection:
+                if isinstance(item, dict):
+                    add(item.get("knowledge_base_id"))
+
+        if not knowledge_base_ids:
+            return []
+        rows = self.db.exec(
+            select(KnowledgeBase).where(KnowledgeBase.id.in_(knowledge_base_ids))
+        ).all()
+        rows_by_id = {row.id: row for row in rows}
+        return [
+            {"id": knowledge_base_id, "name": rows_by_id[knowledge_base_id].name}
+            for knowledge_base_id in knowledge_base_ids
+            if knowledge_base_id in rows_by_id
+        ]
+
     @staticmethod
     def empty_items(query: KnowledgeQuery, source_message: str) -> dict[str, Any]:
         return {
             "query": query.model_dump(mode="json"),
             "source_message": source_message,
+            "knowledge_bases": [],
             "selected_buckets": [],
             "chunks": [],
             "trace": [],

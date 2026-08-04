@@ -75,7 +75,8 @@ GENERAL_SKILL_REPLY_OUTPUT = {"reply": "string"}
 
 
 class GeneralSkillSelector:
-    # 阅读提示：从员工可见通用技能中选择候选，不负责执行脚本。
+    # 阅读提示：这是 AgentLoop 的能力选择模型。输入只包含当前员工可见的
+    # Tool 和已发布通用技能；输出是“选择什么”，不包含 transport 路由或执行权。
     def decide(
         self,
         query: str,
@@ -121,6 +122,8 @@ class GeneralSkillSelector:
                 unified_system_prompt(), payload
             )
         decision = GeneralSkillSelection.model_validate(raw)
+        # 模型只能返回 StaffDeck 本地 Tool 全名。即使它编造了一个工具名，
+        # 这里也会清空选择；MCP Server 和远端叶子工具名稍后由后端数据库关系解析。
         tool_names = {tool.name for tool in enabled_tools}
         if (
             not decision.use_tool

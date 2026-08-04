@@ -377,7 +377,14 @@ def test_turn_trace_merges_knowledge_lifecycle_events_for_same_query() -> None:
             created_at=started_at,
         )
     ]
-    common_payload = {"query": {"query": query}, "turn_id": "msg_user"}
+    common_payload = {
+        "query": {"query": query},
+        "turn_id": "msg_user",
+        "knowledge_bases": [{"id": "kb_travel", "name": "差旅制度"}],
+        "selected_documents": [
+            {"id": "doc_travel", "title": "差旅报销办法", "filename": "travel.md"}
+        ],
+    }
     events = [
         AgentEvent(
             tenant_id="tenant_demo",
@@ -418,11 +425,50 @@ def test_turn_trace_merges_knowledge_lifecycle_events_for_same_query() -> None:
             "kind": "knowledge",
             "phase": "result",
             "text": "读取业务资料",
-            "detail": "命中 Wiki 1 个",
+            "detail": "知识库：差旅制度 · 文档：差旅报销办法 · 命中知识图谱 1 个",
             "state": "completed",
             "icon": "advance",
         }
     ]
+
+
+def test_turn_trace_replaces_internal_no_scene_reason_with_user_facing_copy() -> None:
+    started_at = datetime(2026, 7, 15, 14, 35, 0)
+    messages = [
+        Message(
+            id="msg_user",
+            tenant_id="tenant_demo",
+            session_id="session_router_copy",
+            role="user",
+            content="你好",
+            created_at=started_at,
+        )
+    ]
+    events = [
+        AgentEvent(
+            tenant_id="tenant_demo",
+            session_id="session_router_copy",
+            event_type="user_message_received",
+            payload_json={"message_id": "msg_user", "message": "你好"},
+            created_at=started_at,
+        ),
+        AgentEvent(
+            tenant_id="tenant_demo",
+            session_id="session_router_copy",
+            event_type="router_decision_created",
+            payload_json={
+                "turn_id": "msg_user",
+                "decision": "answer_only",
+                "reason": "No published scene skills are available; answer as chat.",
+            },
+            created_at=started_at + timedelta(seconds=1),
+        )
+    ]
+
+    traces = _build_turn_traces(messages, events, {})
+
+    decision = next(line for line in traces[0]["lines"] if line["id"] == "decision_router")
+    assert decision["detail"] == "未匹配到业务流程，继续使用可用知识和工具处理。"
 
 
 def test_turn_trace_merges_created_and_relayed_reflection_decisions() -> None:

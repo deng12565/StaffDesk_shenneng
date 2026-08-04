@@ -1605,6 +1605,11 @@ export function KnowledgeAddPage({ currentUser }: KnowledgePageProps = {}) {
   const navigate = useNavigate();
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBaseRead[]>([]);
   const [jobs, setJobs] = useState<Record<string, KnowledgeIngestJobRead>>({});
+  const [knowledgeBaseDraft, setKnowledgeBaseDraft] = useState({ name: '', description: '' });
+  const [queuedFiles, setQueuedFiles] = useState<File[]>([]);
+  const [uploadTarget, setUploadTarget] = useState<KnowledgeBaseRead | null>(null);
+  const [submittingFiles, setSubmittingFiles] = useState(false);
+  const [submissionProgress, setSubmissionProgress] = useState({ completed: 0, total: 0 });
   const [agentId, setAgentId] = useState(() => window.localStorage.getItem(ENTERPRISE_AGENT_STORAGE_KEY) || '');
   const [agentScopeLoaded, setAgentScopeLoaded] = useState(false);
   const [checkedDiscoveryJobIds, setCheckedDiscoveryJobIds] = useState<string[]>([]);
@@ -1625,6 +1630,10 @@ export function KnowledgeAddPage({ currentUser }: KnowledgePageProps = {}) {
   const visibleKnowledgeBases = useMemo(
     () => knowledgeBases.filter((item) => !isEmptyDefaultKnowledgeBase(item)),
     [knowledgeBases],
+  );
+  const queuedFileSize = useMemo(
+    () => queuedFiles.reduce((total, file) => total + file.size, 0),
+    [queuedFiles],
   );
 
   useEffect(() => {
@@ -1727,25 +1736,111 @@ export function KnowledgeAddPage({ currentUser }: KnowledgePageProps = {}) {
     }
   }
 
-  async function uploadFile(file: File) {
+  function queueFiles(files: File[]) {
+    const legacyDocCount = files.filter((file) => file.name.toLowerCase().endsWith('.doc')).length;
+    const supportedFiles = files.filter(isSupportedKnowledgeFile);
+    const unsupportedCount = files.length - supportedFiles.length - legacyDocCount;
+    if (legacyDocCount > 0) {
+      notify.warning(`${legacyDocCount} 个旧版 .doc 文件未添加，请先转换为 .docx`);
+    }
+    if (unsupportedCount > 0) {
+      notify.warning(`${unsupportedCount} 个文件格式不受支持，已跳过`);
+    }
+    if (supportedFiles.length === 0) return;
+
+    setQueuedFiles((current) => {
+      const existing = new Set(current.map(knowledgeFileKey));
+      return [
+        ...current,
+        ...supportedFiles.filter((file) => {
+          const key = knowledgeFileKey(file);
+          if (existing.has(key)) return false;
+          existing.add(key);
+          return true;
+        }),
+      ];
+    });
+    if (!uploadTarget && !knowledgeBaseDraft.name.trim() && queuedFiles.length === 0) {
+      setKnowledgeBaseDraft((current) => ({
+        ...current,
+        name: knowledgeFileTitle(supportedFiles[0]),
+      }));
+    }
+  }
+
+  function removeQueuedFile(file: File) {
+    const key = knowledgeFileKey(file);
+    setQueuedFiles((current) => current.filter((item) => knowledgeFileKey(item) !== key));
+  }
+
+  async function createKnowledgeBaseFromFiles() {
     if (!isEnterpriseAdmin(currentUser) && !agentId) {
       notify.warning('请先选择一个数字员工');
       return;
     }
+    const name = knowledgeBaseDraft.name.trim();
+    if (!uploadTarget && !name) {
+      notify.warning('请填写知识库名称');
+      return;
+    }
+    if (queuedFiles.length === 0) {
+      notify.warning('请至少添加一个文件');
+      return;
+    }
+
+    setSubmittingFiles(true);
+    setSubmissionProgress({ completed: 0, total: queuedFiles.length });
     try {
-      const contentBase64 = await fileToBase64(file);
+      let target = uploadTarget;
       const suffix = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : '';
-      const job = await api.post<KnowledgeIngestJobRead>(`/api/enterprise/knowledge/documents${suffix}`, {
-        tenant_id: TENANT_ID,
-        filename: file.name,
-        title: file.name.replace(/\.[^.]+$/, ''),
-        content_base64: contentBase64,
-      });
-      setJobs((prev) => ({ ...prev, [job.id]: job }));
+      if (!target) {
+        target = await api.post<KnowledgeBaseRead>(`/api/enterprise/knowledge-bases${suffix}`, {
+          tenant_id: TENANT_ID,
+          name,
+          description: knowledgeBaseDraft.description.trim() || undefined,
+        });
+        setUploadTarget(target);
+        const createdTarget = target;
+        setKnowledgeBases((current) => (
+          current.some((item) => item.id === createdTarget.id) ? current : [createdTarget, ...current]
+        ));
+      }
+
+      const failedFiles: File[] = [];
+      let completed = 0;
+      for (const file of queuedFiles) {
+        try {
+          const contentBase64 = await fileToBase64(file);
+          const job = await api.post<KnowledgeIngestJobRead>(`/api/enterprise/knowledge/documents${suffix}`, {
+            tenant_id: TENANT_ID,
+            knowledge_base_id: target.id,
+            filename: file.name,
+            title: knowledgeFileTitle(file),
+            content_base64: contentBase64,
+          });
+          setJobs((prev) => ({ ...prev, [job.id]: job }));
+        } catch {
+          failedFiles.push(file);
+        } finally {
+          completed += 1;
+          setSubmissionProgress({ completed, total: queuedFiles.length });
+        }
+      }
+
+      setQueuedFiles(failedFiles);
       await refreshKnowledgeBases();
-      notify.success('已创建知识库和入库任务');
+      const succeededCount = queuedFiles.length - failedFiles.length;
+      if (failedFiles.length > 0) {
+        notify.warning(`知识库已创建，已提交 ${succeededCount} 个文件，${failedFiles.length} 个文件上传失败，可再次提交`);
+      } else {
+        notify.success(`知识库「${target.name}」已创建，已提交 ${succeededCount} 个文件`);
+        setKnowledgeBaseDraft({ name: '', description: '' });
+        setUploadTarget(null);
+      }
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : '上传失败');
+      notify.error(error instanceof Error ? error.message : '创建知识库失败');
+    } finally {
+      setSubmittingFiles(false);
     }
   }
 
@@ -1827,8 +1922,8 @@ export function KnowledgeAddPage({ currentUser }: KnowledgePageProps = {}) {
         <KCard className="knowledge-upload-card" bodyClassName="flex flex-col gap-[16px]">
           <div className="knowledge-upload-controls">
             <div>
-              <strong className="block text-[14px] font-semibold text-foreground">上传文档即创建知识库</strong>
-              <span className="text-[13px] text-[#858b9c]">一个文件对应一份独立知识库；回到知识库后可查看文档卡片、知识索引和知识图谱。</span>
+              <strong className="block text-[14px] font-semibold text-foreground">创建多文件知识库</strong>
+              <span className="text-[13px] text-[#858b9c]">{queuedFiles.length > 0 ? `已选择 ${queuedFiles.length} 个文件` : '尚未添加文件'}</span>
             </div>
             <UIButton variant="outline" onClick={() => navigate('/enterprise/knowledge')}>管理已有知识库</UIButton>
           </div>
@@ -1847,19 +1942,98 @@ export function KnowledgeAddPage({ currentUser }: KnowledgePageProps = {}) {
             ))}
           </div>
         )}
+        <div className="grid gap-[14px] sm:grid-cols-2">
+          <label className="grid min-w-0 gap-[7px] text-[13px] font-medium text-foreground">
+            知识库名称
+            <Input
+              value={uploadTarget?.name || knowledgeBaseDraft.name}
+              disabled={submittingFiles || Boolean(uploadTarget)}
+              placeholder="例如：员工制度与流程"
+              onChange={(event) => setKnowledgeBaseDraft((current) => ({ ...current, name: event.target.value }))}
+            />
+          </label>
+          <label className="grid min-w-0 gap-[7px] text-[13px] font-medium text-foreground">
+            描述（可选）
+            <Input
+              value={knowledgeBaseDraft.description}
+              disabled={submittingFiles || Boolean(uploadTarget)}
+              placeholder="简要说明知识库涵盖的内容"
+              onChange={(event) => setKnowledgeBaseDraft((current) => ({ ...current, description: event.target.value }))}
+            />
+          </label>
+        </div>
         <FileDropzone
           multiple
-          accept=".doc,.docx,.txt,.md,.markdown,.html,.htm,.pdf"
-          onFiles={(files) => files.forEach((file) => void uploadFile(file))}
+          disabled={submittingFiles}
+          accept=".docx,.txt,.md,.markdown,.html,.htm,.pdf"
+          onFiles={queueFiles}
         >
           <div className="knowledge-upload-inner">
             <InboxOutlined />
             <div>
-              <strong>拖拽文档到这里，或点击上传</strong>
-              <span>支持 doc/docx/txt/md/html/pdf；旧版 doc 会提示转换为 docx。</span>
+              <strong>添加知识库文件</strong>
+              <span>支持一次选择多个 docx/txt/md/html/pdf 文件</span>
             </div>
           </div>
         </FileDropzone>
+        {queuedFiles.length > 0 && (
+          <div className="overflow-hidden rounded-[8px] border border-border">
+            <div className="flex min-h-[44px] items-center justify-between gap-[12px] border-b border-border bg-(--surface-subtle) px-[14px] text-[13px] text-[#5f6678]">
+              <span>{queuedFiles.length} 个待提交文件</span>
+              <span>{formatKnowledgeFileSize(queuedFileSize)}</span>
+            </div>
+            <div className="divide-y divide-border">
+              {queuedFiles.map((file) => (
+                <div
+                  key={knowledgeFileKey(file)}
+                  className="grid min-h-[54px] grid-cols-[minmax(0,1fr)_36px] items-center gap-[10px] px-[14px]"
+                >
+                  <div className="flex min-w-0 items-center gap-[10px]">
+                    <FileAddOutlined className="shrink-0 text-[#757f9c]" />
+                    <div className="min-w-0">
+                      <div className="truncate text-[13px] font-medium text-foreground" title={file.name}>{file.name}</div>
+                      <div className="text-[12px] text-[#858b9c]">{formatKnowledgeFileSize(file.size)}</div>
+                    </div>
+                  </div>
+                  <UIButton
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-[32px]"
+                    disabled={submittingFiles}
+                    aria-label={`移除文件 ${file.name}`}
+                    title="移除文件"
+                    onClick={() => removeQueuedFile(file)}
+                  >
+                    <DeleteOutlined />
+                  </UIButton>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="flex min-h-[40px] flex-wrap items-center justify-between gap-[12px]">
+          <span className="text-[12px] text-[#858b9c]">
+            {submittingFiles
+              ? `正在提交 ${submissionProgress.completed}/${submissionProgress.total}`
+              : uploadTarget
+                ? `继续向「${uploadTarget.name}」添加文件`
+                : queuedFiles.length > 0
+                  ? `${queuedFiles.length} 个文件将归入同一个知识库`
+                  : '添加文件后即可创建知识库'}
+          </span>
+          <UIButton
+            type="button"
+            disabled={submittingFiles || queuedFiles.length === 0 || (!uploadTarget && !knowledgeBaseDraft.name.trim())}
+            onClick={() => void createKnowledgeBaseFromFiles()}
+          >
+            {submittingFiles
+              ? `正在提交 ${submissionProgress.completed}/${submissionProgress.total}`
+              : uploadTarget
+                ? `继续提交 ${queuedFiles.length} 个文件`
+                : `创建知识库并导入 ${queuedFiles.length} 个文件`}
+          </UIButton>
+        </div>
         </KCard>
 
         <KCard title="入库任务">
@@ -3298,6 +3472,37 @@ function typeLabel(type: string) {
   if (type === 'skill') return '技能';
   if (type === 'tool') return '工具';
   return '提示';
+}
+
+const SUPPORTED_KNOWLEDGE_FILE_EXTENSIONS = new Set([
+  '.docx',
+  '.txt',
+  '.md',
+  '.markdown',
+  '.html',
+  '.htm',
+  '.pdf',
+]);
+
+function isSupportedKnowledgeFile(file: File): boolean {
+  const suffixIndex = file.name.lastIndexOf('.');
+  const suffix = suffixIndex >= 0 ? file.name.slice(suffixIndex).toLowerCase() : '';
+  return SUPPORTED_KNOWLEDGE_FILE_EXTENSIONS.has(suffix);
+}
+
+function knowledgeFileKey(file: File): string {
+  return `${file.name}\u0000${file.size}\u0000${file.lastModified}`;
+}
+
+function knowledgeFileTitle(file: File): string {
+  return file.name.replace(/\.[^.]+$/, '') || file.name;
+}
+
+function formatKnowledgeFileSize(size: number): string {
+  if (!Number.isFinite(size) || size <= 0) return '0 B';
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(size < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function fileToBase64(file: File): Promise<string> {

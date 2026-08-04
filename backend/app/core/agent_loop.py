@@ -579,6 +579,7 @@ class AgentLoop:
             session_state=public_session(chat_session),
         )
 
+    # ========== 工具调用主线 1：场景路由后的直接工具（同步） ==========
     def _try_handle_direct_tool_after_scene_router(
         self,
         request: ChatTurnRequest,
@@ -590,6 +591,12 @@ class AgentLoop:
         conversation_context: dict[str, object] | None = None,
         user_message_id: str | None = None,
     ) -> ChatTurnResponse | None:
+        """执行能力选择器给出的直接工具调用，并生成最终自然语言回复。
+
+        能力选择器中的 LLM 只从当前员工可见的 Tool 名单中选择名称和参数；
+        它不负责判断 MCP transport，也不直接连接 MCP Server。实际调用统一进入
+        ``_execute_tool_call``，再由 ``ToolExecutor`` 做权限检查和协议路由。
+        """
         if (
             not self._scene_router_deferred_to_general(router_decision)
             or selection is None
@@ -1014,6 +1021,7 @@ class AgentLoop:
             self._turn_payload(result.model_dump(mode="json"), user_message_id),
         )
 
+    # ========== 工具调用主线 2：场景路由后的直接工具（流式） ==========
     def _stream_direct_tool_response(
         self,
         request: ChatTurnRequest,
@@ -1027,6 +1035,11 @@ class AgentLoop:
         user_message_id: str | None = None,
         is_cancelled: Callable[[], bool] | None = None,
     ) -> Iterator[dict[str, object]]:
+        """流式执行直接工具，并依次发出选择、结果、回复和完成事件。
+
+        与同步路径共用同一个 ``_execute_tool_call``，因此员工权限、幂等重放、
+        MCP 路由和审计语义保持一致；这里只额外负责把阶段状态转换成 SSE 事件。
+        """
         tool_call = selection.tool_call
         if not selection.use_tool or tool_call is None:
             return
@@ -4698,6 +4711,7 @@ class AgentLoop:
             return ToolResult(tool_name=tool_call.name, success=True, data=replay_data), event.id
         return None
 
+    # ========== 工具调用主线 3：统一执行、幂等与审计边界 ==========
     def _execute_tool_call(
         self,
         request: ChatTurnRequest,
@@ -4708,6 +4722,11 @@ class AgentLoop:
         conversation_context: dict[str, object] | None = None,
         memory_context: list[dict[str, object]] | None = None,
     ) -> ToolResult:
+        """执行已经选定的工具，并记录可审计的开始/完成事件。
+
+        普通 ToolCall 交给 ``ToolExecutor``；``general_skill.*`` 是 StaffDeck
+        内部能力，留在 AgentLoop 的通用技能运行链。模型不会在这里决定路由。
+        """
         # HTTP 和 MCP 都从这里进入同一条审计链：先校验员工可见性和幂等重放，
         # 再记录 started/finished 事件。真正的协议差异下沉到 ToolExecutor，
         # 所以接入天气 MCP 不需要在 AgentLoop 增加 MCP 专用分支。
@@ -5415,6 +5434,7 @@ class AgentLoop:
             return None
         return skill, selection
 
+    # ========== 工具调用主线 0：把当前员工可见能力交给 LLM 选择 ==========
     def _select_general_capability(
         self,
         message: str,
@@ -5423,6 +5443,12 @@ class AgentLoop:
         conversation_context: dict[str, object] | None = None,
         memory_context: list[dict[str, object]] | None = None,
     ) -> tuple[GeneralSkill | None, GeneralSkillSelection]:
+        """在当前员工可见的工具、通用技能和知识能力中做一次模型选择。
+
+        ``GeneralSkillSelector`` 会再次校验模型返回的工具名是否属于
+        ``available_tools``。通过这里仍不等于获得执行权限，ToolExecutor 在
+        实际调用前还会按租户、员工和场景技能做确定性校验。
+        """
         general_skills = self._list_published_general_skills(model_config.tenant_id, agent_id)
         available_tools = self._list_enabled_tools(model_config.tenant_id, agent_id)
         try:

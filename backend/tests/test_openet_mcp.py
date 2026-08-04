@@ -9,8 +9,14 @@ from typing import Any
 
 import httpx
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
+from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_service_token
+from app.tools import mcp_client as mcp_client_module
+from app.tools.mcp_client import list_mcp_tools
 from app.tools.openet_mcp.catalog import CATALOG_VERSION, DATASETS
+from app.tools.openet_mcp.http import router as openet_http_router
 from app.tools.openet_mcp.protocol import main as protocol_main
 from app.tools.openet_mcp.service import (
     TOOL_DEFINITIONS,
@@ -20,8 +26,6 @@ from app.tools.openet_mcp.service import (
     OpenETService,
     load_openet_token,
 )
-from app.tools.mcp_client import list_mcp_tools
-
 
 NOW = datetime(2026, 7, 31, 12, 0, 0)
 FAKE_TOKEN = "unit-test-token-not-a-secret"
@@ -224,6 +228,72 @@ def test_stdio_protocol_initialize_notification_list_and_local_call() -> None:
     assert {item["dataset"] for item in content["datasets"]} == {
         "era5_surface", "era5_land", "gdas_surface"
     }
+
+
+def test_streamable_http_route_requires_internal_auth_and_serves_all_mcp_steps() -> None:
+    app = FastAPI()
+    app.include_router(openet_http_router)
+    client = TestClient(app)
+    endpoint = "/api/mcp/openet"
+
+    initialize = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
+    assert client.post(endpoint, json=initialize).status_code == 401
+
+    headers = {INTERNAL_SERVICE_HEADER: internal_service_token()}
+    initialized = client.post(endpoint, json=initialize, headers=headers)
+    assert initialized.status_code == 200
+    assert initialized.json()["result"]["protocolVersion"] == "2024-11-05"
+
+    notification = client.post(
+        endpoint,
+        json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+        headers=headers,
+    )
+    assert notification.status_code == 202
+
+    listed = client.post(
+        endpoint,
+        json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        headers=headers,
+    )
+    assert [item["name"] for item in listed.json()["result"]["tools"]] == [
+        item["name"] for item in TOOL_DEFINITIONS
+    ]
+
+    called = client.post(
+        endpoint,
+        json={
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "tools/call",
+            "params": {"name": "list_datasets", "arguments": {"category": "history"}},
+        },
+        headers=headers,
+    )
+    result = called.json()["result"]
+    assert result["isError"] is False
+    assert len(result["structuredContent"]["datasets"]) == 3
+
+
+def test_http_client_adds_internal_auth_only_for_configured_openet_origin(monkeypatch) -> None:
+    settings = type(
+        "Settings",
+        (),
+        {"normalized_tool_base_url": "http://127.0.0.1:5173"},
+    )()
+    monkeypatch.setattr(mcp_client_module, "get_settings", lambda: settings)
+
+    internal = mcp_client_module._HttpSession(
+        {"url": "http://127.0.0.1:5173/api/mcp/openet"},
+        8,
+    )._headers()
+    external = mcp_client_module._HttpSession(
+        {"url": "https://example.test/api/mcp/openet"},
+        8,
+    )._headers()
+
+    assert internal[INTERNAL_SERVICE_HEADER] == internal_service_token()
+    assert INTERNAL_SERVICE_HEADER not in external
 
 
 def test_local_catalog_tools_never_call_upstream() -> None:

@@ -3003,7 +3003,7 @@ def _event_trace_line(
             "id": "decision_router",
             "kind": "decision",
             "text": f"判断意图 {intent}" if intent else "完成SOP判断",
-            "detail": reason or None,
+            "detail": _public_router_reason(reason),
             "state": "completed",
         }
     if event.event_type == "step_result":
@@ -3116,8 +3116,12 @@ def _event_trace_line(
         buckets = payload.get("selected_buckets") if isinstance(payload.get("selected_buckets"), list) else []
         concepts = payload.get("selected_concepts") if isinstance(payload.get("selected_concepts"), list) else []
         evidence = payload.get("evidence_pack") if isinstance(payload.get("evidence_pack"), list) else []
+        knowledge_base_names = _trace_item_names(payload.get("knowledge_bases"), "name")
+        document_names = _trace_item_names(payload.get("selected_documents"), "title", "filename")
         parts = [
-            f"命中 Wiki {len(concepts)} 个" if concepts else "",
+            f"知识库：{_trace_name_summary(knowledge_base_names)}" if knowledge_base_names else "",
+            f"文档：{_trace_name_summary(document_names)}" if document_names else "",
+            f"命中知识图谱 {len(concepts)} 个" if concepts else "",
             f"展开 {len(buckets)} 个知识桶" if buckets else "",
             f"读取 {len(chunks)} 个片段" if chunks else "",
             f"生成 {len(evidence)} 条引用候选" if evidence else "",
@@ -3219,6 +3223,32 @@ def _event_trace_line(
             "state": "failed",
         }
     return None
+
+
+def _public_router_reason(reason: str) -> str | None:
+    normalized = " ".join(reason.split())
+    if normalized.startswith("No published scene skills are available;"):
+        return "未匹配到业务流程，继续使用可用知识和工具处理。"
+    return reason or None
+
+
+def _trace_item_names(value: object, *keys: str) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    names: list[str] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = next((str(item.get(key) or "").strip() for key in keys if item.get(key)), "")
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _trace_name_summary(names: list[str], limit: int = 3) -> str:
+    visible = names[:limit]
+    suffix = f" 等 {len(names)} 个" if len(names) > limit else ""
+    return "、".join(visible) + suffix
 
 
 def _tool_trace_detail(payload: dict) -> str | None:

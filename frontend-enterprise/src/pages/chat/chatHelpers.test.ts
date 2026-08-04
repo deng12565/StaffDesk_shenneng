@@ -6,7 +6,9 @@ import {
   STREAM_TERMINAL_EVENTS,
   canRateMessage,
   knowledgeCitations,
+  knowledgeResultTraceDetail,
   messageAttachments,
+  routerDecisionTraceLine,
   scheduledDraftForMessage,
 } from './chatHelpers';
 
@@ -90,5 +92,37 @@ describe('chat history consumer contract', () => {
       'stream_end',
       'stream_interrupted',
     ]);
+  });
+
+  it('shows the knowledge bases and documents used by a retrieval', () => {
+    const detail = knowledgeResultTraceDetail({
+      knowledge_bases: [
+        { id: 'kb-travel', name: 'Travel Policies' },
+        { id: 'kb-finance', name: 'Finance Rules' },
+      ],
+      selected_documents: [
+        { id: 'doc-travel', title: 'Travel Reimbursement' },
+        { id: 'doc-expense', filename: 'Expense Standards.pdf' },
+      ],
+      selected_concepts: [{ id: 'concept-1' }],
+      selected_buckets: [{ id: 'bucket-1' }],
+      chunks: [{ id: 'chunk-1' }, { id: 'chunk-2' }],
+      evidence_pack: [{ id: 'evidence-1' }],
+    });
+
+    expect(detail).toContain('Travel Policies');
+    expect(detail).toContain('Finance Rules');
+    expect(detail).toContain('Travel Reimbursement');
+    expect(detail).toContain('Expense Standards.pdf');
+    expect(detail?.split(' · ')).toHaveLength(6);
+  });
+
+  it('replaces the internal scene fallback reason with user-facing copy', () => {
+    expect(routerDecisionTraceLine({
+      decision: 'answer_only',
+      reason: 'No published scene skills are available; try general skills, then answer as chat.',
+    })).toEqual(expect.objectContaining({
+      detail: '未匹配到业务流程，继续使用可用知识和工具处理。',
+    }));
   });
 });

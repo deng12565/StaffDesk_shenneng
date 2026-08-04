@@ -117,6 +117,7 @@ class ToolExecutor:
             return self._error(tool.name, "EXECUTION_ERROR", str(exc))
 
     def _execute_mcp_tool(self, tool: Tool, arguments: dict[str, Any]) -> ToolResult:
+        """把本地 Tool 映射成 MCP Server 连接和远端叶子工具后执行。"""
         try:
             config, tool_name = self._resolve_mcp_config(tool)
             policy = self._execution_policy(tool)
@@ -149,6 +150,11 @@ class ToolExecutor:
         MCPServer 保存共享的连接信息；Tool.config_json 只保存该 server 下的
         叶子工具名及执行策略。两者分开后，同一天气 server 的多个工具无需
         各自复制 URL、headers 或 stdio 启动参数。
+
+        例如本地全名 ``openet.get_point_forecast`` 对应：
+        ``Tool.mcp_server_id -> openet Server``，以及
+        ``Tool.config_json.tool -> get_point_forecast``。这就是示例映射表在本
+        项目中的持久化实现，不需要额外维护一份内存字典。
         """
         tool_config = tool.config_json or {}
         tool_name = (
@@ -162,6 +168,7 @@ class ToolExecutor:
         return self._server_client_config(server), tool_name
 
     def _server_client_config(self, server: MCPServer) -> dict[str, Any]:
+        """将数据库中的共享 Server 配置转换为 MCP 客户端连接参数。"""
         transport = server.transport or "streamable_http"
         config: dict[str, Any] = {"transport": transport}
         if transport in {"streamable_http", "sse"}:
