@@ -159,6 +159,7 @@ function employeeStats(agent: AgentProfileRead): PlatformStat[] {
     { value: agentResourceCount(agent, 'knowledge_base'), label: '资料' },
     { value: agentResourceCount(agent, 'general_skill'), label: '技能' },
     { value: agentResourceCount(agent, 'skill'), label: 'SOP' },
+    { value: agentResourceCount(agent, 'tool'), label: '工具' },
   ];
 }
 

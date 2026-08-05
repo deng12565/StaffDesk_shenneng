@@ -3131,7 +3131,7 @@ def _event_trace_line(
             "kind": "knowledge",
             "phase": "result",
             "text": "读取业务资料",
-            "detail": " · ".join(part for part in parts if part),
+            "detail": " · ".join(part for part in parts if part) or "未命中可引用的业务资料",
             "state": "completed",
         }
     if event.event_type == "tool_result":

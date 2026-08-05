@@ -11,6 +11,8 @@ from app.api.tools import (
     delete_mcp_server,
     discover_mcp_tools,
     discover_mcp_tools_adhoc,
+    get_mcp_tool_inventory,
+    list_mcp_servers,
     list_tools,
     sync_mcp_tools,
 )
@@ -134,6 +136,172 @@ def test_sync_mcp_tools_imports_tools_and_executes() -> None:
         )
         assert result.success is True
         assert result.data == {"text": "hi", "length": 2}
+
+
+def test_mcp_server_counts_and_cached_inventory_are_scope_aware(monkeypatch) -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.add(AgentProfile(id="agent_overall", tenant_id="tenant_demo", name="整体智能体", is_overall=True))
+        db.add(AgentProfile(id="agent_employee", tenant_id="tenant_demo", name="数字员工", is_overall=False))
+        db.commit()
+
+        server = create_mcp_server(
+            MCPServerCreateRequest(
+                tenant_id="tenant_demo",
+                name="builtin_demo",
+                connection=MCPServerConnection(transport="builtin"),
+            ),
+            db,
+            _admin_user(),
+        )
+        sync_mcp_tools(
+            server.id,
+            MCPSyncRequest(tenant_id="tenant_demo", tool_names=["echo"]),
+            db,
+            agent_id="agent_employee",
+            current_user=_admin_user(),
+        )
+
+        listed = list_mcp_servers("tenant_demo", db)
+        assert len(listed) == 1
+        assert listed[0].available_tool_count == 3
+        assert listed[0].tool_count == 1
+
+        def fail_if_remote_called(*_args, **_kwargs):
+            raise AssertionError("cached inventory must not call tools/list")
+
+        monkeypatch.setattr("app.api.tools.list_mcp_tools", fail_if_remote_called)
+        employee_inventory = get_mcp_tool_inventory(
+            server.id, "tenant_demo", "agent_employee", db
+        )
+        assert employee_inventory.cache_available is True
+        assert employee_inventory.available_count == 3
+        assert employee_inventory.imported_count == 1
+        assert employee_inventory.current_scope_count == 1
+        assert employee_inventory.current_scope_is_overall is False
+        by_name = {tool.name: tool for tool in employee_inventory.tools}
+        assert by_name["echo"].imported is True
+        assert by_name["echo"].in_current_scope is True
+        assert by_name["sum"].imported is False
+        assert by_name["sum"].in_current_scope is False
+
+        overall_inventory = get_mcp_tool_inventory(
+            server.id, "tenant_demo", "agent_overall", db
+        )
+        assert overall_inventory.imported_count == 1
+        assert overall_inventory.current_scope_count == 1
+        assert overall_inventory.current_scope_is_overall is True
+        assert {tool.name for tool in overall_inventory.tools if tool.in_current_scope} == {
+            "echo"
+        }
+
+        persisted = db.get(MCPServer, server.id)
+        persisted.discovered_tools_json = [
+            tool
+            for tool in persisted.discovered_tools_json
+            if tool.get("name") != "echo"
+        ]
+        db.add(persisted)
+        db.commit()
+        stale_cache_inventory = get_mcp_tool_inventory(
+            server.id, "tenant_demo", "agent_employee", db
+        )
+        assert stale_cache_inventory.available_count == 2
+        assert stale_cache_inventory.imported_count == 1
+        assert stale_cache_inventory.current_scope_count == 1
+
+
+def test_mcp_inventory_without_cache_reports_unknown(monkeypatch) -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+        server = create_mcp_server(
+            MCPServerCreateRequest(
+                tenant_id="tenant_demo",
+                name="new_server",
+                connection=MCPServerConnection(transport="builtin"),
+            ),
+            db,
+            _admin_user(),
+        )
+
+        def fail_if_remote_called(*_args, **_kwargs):
+            raise AssertionError("empty inventory must not call tools/list")
+
+        monkeypatch.setattr("app.api.tools.list_mcp_tools", fail_if_remote_called)
+        inventory = get_mcp_tool_inventory(server.id, "tenant_demo", None, db)
+        assert inventory.cache_available is False
+        assert inventory.available_count is None
+        assert inventory.imported_count == 0
+        assert inventory.current_scope_count == 0
+        assert inventory.tools == []
+
+
+def test_successful_empty_discovery_is_cached(monkeypatch) -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+        server = create_mcp_server(
+            MCPServerCreateRequest(
+                tenant_id="tenant_demo",
+                name="empty_server",
+                connection=MCPServerConnection(transport="builtin"),
+            ),
+            db,
+            _admin_user(),
+        )
+        monkeypatch.setattr("app.api.tools.list_mcp_tools", lambda *_args, **_kwargs: [])
+
+        discovered = discover_mcp_tools(
+            server.id,
+            MCPDiscoverRequest(tenant_id="tenant_demo"),
+            db,
+            _admin_user(),
+        )
+
+        assert discovered.success is True
+        assert discovered.tools == []
+        listed = list_mcp_servers("tenant_demo", db)
+        assert listed[0].available_tool_count == 0
+        inventory = get_mcp_tool_inventory(server.id, "tenant_demo", None, db)
+        assert inventory.cache_available is True
+        assert inventory.available_count == 0
+
+
+def test_failed_discovery_preserves_cached_inventory(monkeypatch) -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        db.commit()
+        server = create_mcp_server(
+            MCPServerCreateRequest(
+                tenant_id="tenant_demo",
+                name="builtin_demo",
+                connection=MCPServerConnection(transport="builtin"),
+            ),
+            db,
+            _admin_user(),
+        )
+        discovered = discover_mcp_tools(
+            server.id,
+            MCPDiscoverRequest(tenant_id="tenant_demo"),
+            db,
+            _admin_user(),
+        )
+        assert discovered.success is True
+        cached_before = list(db.get(MCPServer, server.id).discovered_tools_json)
+
+        def fail_discovery(*_args, **_kwargs):
+            raise RuntimeError("provider unavailable")
+
+        monkeypatch.setattr("app.api.tools.list_mcp_tools", fail_discovery)
+        failed = discover_mcp_tools(
+            server.id,
+            MCPDiscoverRequest(tenant_id="tenant_demo"),
+            db,
+            _admin_user(),
+        )
+        assert failed.success is False
+        assert db.get(MCPServer, server.id).discovered_tools_json == cached_before
 
 
 def test_sync_mcp_tools_preserves_execution_policy() -> None:

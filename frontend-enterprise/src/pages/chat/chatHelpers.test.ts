@@ -117,6 +117,10 @@ describe('chat history consumer contract', () => {
     expect(detail?.split(' · ')).toHaveLength(6);
   });
 
+  it('explains when a knowledge retrieval has no citable result', () => {
+    expect(knowledgeResultTraceDetail({})).toBe('未命中可引用的业务资料');
+  });
+
   it('replaces the internal scene fallback reason with user-facing copy', () => {
     expect(routerDecisionTraceLine({
       decision: 'answer_only',

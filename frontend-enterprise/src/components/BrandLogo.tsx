@@ -28,7 +28,7 @@ export default function BrandLogo({
       />
       {!markOnly && (
         <span className={cn('flex flex-col items-center gap-[2px] leading-none', wordmarkClassName)}>
-          <strong className="text-[17px] font-semibold leading-none text-[#18181a]">
+          <strong data-i18n-ignore className="text-[17px] font-semibold leading-none text-[#18181a]">
             小申数字员工
           </strong>
         </span>

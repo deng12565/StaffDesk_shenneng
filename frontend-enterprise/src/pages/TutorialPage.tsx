@@ -1,6 +1,12 @@
 import { useEffect } from 'react';
 import StaffdeckIcon, { type StaffdeckIconName } from '../components/StaffdeckIcon';
 
+const BRAND_NAME = '小申数字员工';
+const PRODUCT_CHAIN_DESCRIPTION = `${BRAND_NAME}把模型、数字员工、知识库、技能、SOP、工具、记忆、定时任务和 Trace 放到一条链路里，让企业拥有可配置、可验证、可复盘的业务流程对话系统。`;
+const PRODUCT_CORE_DESCRIPTION = `${BRAND_NAME}的核心不是“能聊天”，而是让一个真实岗位拥有自己的配置、资源、执行规则和运营记录。每个员工都可以有独立知识、SOP、工具和记忆；每次对话都能回看路由、工具调用、回复和反馈。`;
+const CORE_FEATURES_DESCRIPTION = `PilotDeck 把能力分成 WorkSpace、Router、Memory、Always On、Gateway；${BRAND_NAME}对应到企业数字员工场景，重点是岗位边界、知识治理、流程执行、工具调用和运营复盘。`;
+const CONVERSATION_DESCRIPTION = `${BRAND_NAME}的对话不是单轮问答。它会在路由、知识、技能、SOP、工具和回复生成之间形成可追踪执行链路。`;
+
 type TocGroup = {
   title: string;
   items: Array<{ id: string; label: string }>;
@@ -217,12 +223,9 @@ export default function TutorialPage() {
     <main className="tutorial-doc-page">
       <section className="tutorial-doc-hero" id="intro">
         <div className="tutorial-doc-hero-copy">
-          <span className="ui-typography tutorial-doc-eyebrow">StaffDeck Docs</span>
+          <span className="ui-typography tutorial-doc-eyebrow">{`${BRAND_NAME}使用指南`}</span>
           <h1 className="ui-typography">企业数字员工运行时，从配置到持续运营</h1>
-          <p className="ui-typography">
-            StaffDeck 把模型、数字员工、知识库、技能、SOP、工具、记忆、定时任务和 Trace 放到一条链路里，
-            让企业拥有可配置、可验证、可复盘的业务流程对话系统。
-          </p>
+          <p className="ui-typography">{PRODUCT_CHAIN_DESCRIPTION}</p>
           <div className="tutorial-doc-actions">
             <a className="tutorial-doc-primary-action" href="#quickstart">快速开始</a>
             <a className="tutorial-doc-secondary-action" href="#core-features">查看核心功能</a>
@@ -233,7 +236,7 @@ export default function TutorialPage() {
             <span><strong>4</strong>推荐场景</span>
           </div>
         </div>
-        <div className="tutorial-doc-hero-map" aria-label="StaffDeck runtime map">
+        <div className="tutorial-doc-hero-map" aria-label={`${BRAND_NAME}运行图`}>
           <span className="tutorial-doc-map-label">Agent-native business runtime</span>
           <div className="tutorial-doc-map-grid">
             {FEATURES.slice(0, 6).map((feature) => (
@@ -254,7 +257,7 @@ export default function TutorialPage() {
       </section>
 
       <div className="tutorial-doc-shell">
-        <aside className="tutorial-doc-nav" aria-label="StaffDeck 单页文档目录">
+        <aside className="tutorial-doc-nav" aria-label={`${BRAND_NAME}单页文档目录`}>
           <div className="tutorial-doc-nav-title">
             <span>目录</span>
             <strong>页面章节</strong>
@@ -275,10 +278,7 @@ export default function TutorialPage() {
         <div>
           <span className="ui-typography tutorial-doc-eyebrow">项目简介</span>
           <h2 className="ui-typography">不是通用 Agent 框架，而是面向业务流程的企业对话运行时</h2>
-          <p className="ui-typography">
-            StaffDeck 的核心不是“能聊天”，而是让一个真实岗位拥有自己的配置、资源、执行规则和运营记录。
-            每个员工都可以有独立知识、SOP、工具和记忆；每次对话都能回看路由、工具调用、回复和反馈。
-          </p>
+          <p className="ui-typography">{PRODUCT_CORE_DESCRIPTION}</p>
         </div>
         <div className="tutorial-doc-pain-grid">
           <span>流程靠人盯</span>
@@ -342,7 +342,7 @@ export default function TutorialPage() {
         <SectionHeading
           eyebrow="Core Features"
           title="核心功能不是散点，而是一套员工运行系统"
-          body="PilotDeck 把能力分成 WorkSpace、Router、Memory、Always On、Gateway；StaffDeck 对应到企业数字员工场景，重点是岗位边界、知识治理、流程执行、工具调用和运营复盘。"
+          body={CORE_FEATURES_DESCRIPTION}
         />
         <div className="tutorial-doc-feature-grid">
           {FEATURES.map((feature) => (
@@ -361,7 +361,7 @@ export default function TutorialPage() {
         <SectionHeading
           eyebrow="Runtime Loop"
           title="一条业务请求如何被推进"
-          body="StaffDeck 的对话不是单轮问答。它会在路由、知识、技能、SOP、工具和回复生成之间形成可追踪执行链路。"
+          body={CONVERSATION_DESCRIPTION}
         />
         <div className="tutorial-doc-loop">
           {['用户消息', 'Router 判断', 'SOP / 技能推进', '知识与工具调用', '回复生成', 'Trace / 反馈 / 记忆'].map((item) => (

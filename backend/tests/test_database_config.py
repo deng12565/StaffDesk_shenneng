@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
@@ -9,6 +10,7 @@ from app.db.database import (
     _migrate_default_model_output_limit,
     _migrate_model_api_protocols,
     _normalize_database_url,
+    _restore_split_document_backed_knowledge_bases,
 )
 
 
@@ -41,6 +43,144 @@ def test_frozen_sqlite_honors_data_dir_override(monkeypatch, tmp_path) -> None:
     result = _normalize_database_url("sqlite:///./skill_agent_loop.db")
     expected = (tmp_path / "skill_agent_loop.db").resolve()
     assert result == f"sqlite:///{expected}"
+
+
+def test_split_document_recovery_restores_multi_file_knowledge_base(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'knowledge.db'}")
+    with engine.begin() as conn:
+        statements = (
+            """
+            CREATE TABLE knowledge_bases (
+                id VARCHAR PRIMARY KEY,
+                status VARCHAR NOT NULL,
+                metadata_json JSON,
+                updated_at DATETIME
+            )
+            """,
+            """
+            CREATE TABLE knowledge_base_versions (
+                id VARCHAR PRIMARY KEY,
+                knowledge_base_id VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                updated_at DATETIME
+            )
+            """,
+            """
+            CREATE TABLE knowledge_documents (
+                id VARCHAR PRIMARY KEY,
+                knowledge_base_id VARCHAR NOT NULL,
+                knowledge_base_version_id VARCHAR
+            )
+            """,
+            """
+            CREATE TABLE knowledge_chunks (
+                id VARCHAR PRIMARY KEY,
+                document_id VARCHAR NOT NULL,
+                knowledge_base_id VARCHAR NOT NULL,
+                knowledge_base_version_id VARCHAR
+            )
+            """,
+            """
+            CREATE TABLE knowledge_ingest_jobs (
+                id VARCHAR PRIMARY KEY,
+                document_id VARCHAR NOT NULL,
+                knowledge_base_id VARCHAR NOT NULL,
+                knowledge_base_version_id VARCHAR
+            )
+            """,
+            """
+            CREATE TABLE agent_knowledge_branches (
+                id VARCHAR PRIMARY KEY,
+                knowledge_base_id VARCHAR NOT NULL,
+                status VARCHAR NOT NULL,
+                updated_at DATETIME
+            )
+            """,
+        )
+        for statement in statements:
+            conn.execute(text(statement))
+        metadata = json.dumps(
+            {
+                "created_from_document_upload": True,
+                "source_document_id": "doc_1",
+                "split_from_knowledge_base_id": "kb_parent",
+            }
+        )
+        inserts = (
+            ("INSERT INTO knowledge_bases VALUES ('kb_parent', 'active', '{}', CURRENT_TIMESTAMP)", {}),
+            (
+                "INSERT INTO knowledge_bases VALUES "
+                "('kb_doc_1', 'active', :metadata, CURRENT_TIMESTAMP)",
+                {"metadata": metadata},
+            ),
+            (
+                "INSERT INTO knowledge_base_versions VALUES "
+                "('kbver_parent', 'kb_parent', 'active', CURRENT_TIMESTAMP)",
+                {},
+            ),
+            (
+                "INSERT INTO knowledge_base_versions VALUES "
+                "('kbver_doc_1', 'kb_doc_1', 'active', CURRENT_TIMESTAMP)",
+                {},
+            ),
+            ("INSERT INTO knowledge_documents VALUES ('doc_1', 'kb_doc_1', 'kbver_doc_1')", {}),
+            (
+                "INSERT INTO knowledge_chunks VALUES "
+                "('chunk_1', 'doc_1', 'kb_doc_1', 'kbver_doc_1')",
+                {},
+            ),
+            (
+                "INSERT INTO knowledge_ingest_jobs VALUES "
+                "('job_1', 'doc_1', 'kb_doc_1', 'kbver_doc_1')",
+                {},
+            ),
+            (
+                "INSERT INTO agent_knowledge_branches VALUES "
+                "('branch_1', 'kb_doc_1', 'active', CURRENT_TIMESTAMP)",
+                {},
+            ),
+        )
+        for statement, parameters in inserts:
+            conn.execute(text(statement), parameters)
+        tables = {
+            "knowledge_bases",
+            "knowledge_base_versions",
+            "knowledge_documents",
+            "knowledge_chunks",
+            "knowledge_ingest_jobs",
+            "agent_knowledge_branches",
+        }
+
+        assert _restore_split_document_backed_knowledge_bases(conn, tables) == 1
+        assert _restore_split_document_backed_knowledge_bases(conn, tables) == 0
+
+        assert conn.execute(
+            text(
+                "SELECT knowledge_base_id, knowledge_base_version_id "
+                "FROM knowledge_documents WHERE id = 'doc_1'"
+            )
+        ).one() == ("kb_parent", "kbver_parent")
+        assert conn.execute(
+            text(
+                "SELECT knowledge_base_id, knowledge_base_version_id "
+                "FROM knowledge_chunks WHERE id = 'chunk_1'"
+            )
+        ).one() == ("kb_parent", "kbver_parent")
+        assert conn.execute(
+            text(
+                "SELECT knowledge_base_id, knowledge_base_version_id "
+                "FROM knowledge_ingest_jobs WHERE id = 'job_1'"
+            )
+        ).one() == ("kb_parent", "kbver_parent")
+        assert conn.execute(
+            text("SELECT status FROM knowledge_bases WHERE id = 'kb_doc_1'")
+        ).scalar_one() == "deleted"
+        assert conn.execute(
+            text("SELECT status FROM knowledge_base_versions WHERE id = 'kbver_doc_1'")
+        ).scalar_one() == "deleted"
+        assert conn.execute(
+            text("SELECT status FROM agent_knowledge_branches WHERE id = 'branch_1'")
+        ).scalar_one() == "deleted"
 
 
 def test_default_model_output_limit_migration_is_scoped_and_runs_once(tmp_path) -> None:

@@ -1054,7 +1054,7 @@ export function knowledgeResultTraceDetail(data: Record<string, unknown>): strin
     chunks ? `读取 ${chunks} 个片段` : '',
     evidence ? `生成 ${evidence} 条引用候选` : '',
   ].filter(Boolean);
-  return parts.length ? parts.join(' · ') : undefined;
+  return parts.length ? parts.join(' · ') : '未命中可引用的业务资料';
 }
 
 function traceItemNames(value: unknown, ...keys: string[]): string[] {

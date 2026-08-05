@@ -62,6 +62,7 @@ export default function EmployeeCard({
   const sopCount = resourceCount(employee.resources, 'skill');
   const skillCount = resourceCount(employee.resources, 'general_skill');
   const kbCount = resourceCount(employee.resources, 'knowledge_base');
+  const toolCount = resourceCount(employee.resources, 'tool');
   const galleryPublished = isGalleryEmployee(employee);
   const online = employee.status === 'active';
 
@@ -74,6 +75,7 @@ export default function EmployeeCard({
     { value: kbCount, label: '资料' },
     { value: skillCount, label: '技能' },
     { value: sopCount, label: 'SOP' },
+    { value: toolCount, label: '工具' },
   ];
 
   return (
@@ -256,12 +258,12 @@ export default function EmployeeCard({
       </div>
 
       {/* Stats — pinned to the bottom of the card */}
-      <div className="mt-auto grid grid-cols-3 rounded-[14px] border border-[#E3E7F1] box-sizing: border-box">
+      <div className="mt-auto grid grid-cols-4 rounded-[14px] border border-[#E3E7F1] box-sizing: border-box">
         {stats.map((stat, index) => (
           <div
             key={stat.label}
             className={cn(
-              'flex flex-col justify-center gap-[4px] px-[20px] py-[6px]',
+              'flex min-w-0 flex-col justify-center gap-[4px] px-[12px] py-[6px]',
               index < stats.length - 1 && 'border-r border-[#eef1f5]',
             )}
           >

@@ -34,11 +34,12 @@ type GuideStep = {
 const CARD_ICON_CLASS = "size-[18px] text-white";
 const CARD_BADGE_CLASS =
   "font-['Alimama_ShuHeiTi',_sans-serif] text-[16px] font-bold text-white";
+const BRAND_NAME = "小申数字员工";
 
 const STEPS: GuideStep[] = [
   {
     image: galleryImage,
-    eyebrow: "欢迎使用 StaffDeck",
+    eyebrow: `欢迎使用${BRAND_NAME}`,
     titleLines: ["数字员工", "全流程构建与管理平台"],
     description:
       "像招聘、培养、管理真人员工一样，构建你的数字员工团队。把重复的事情交给数字员工，让自己专注更重要的工作。",

@@ -1725,10 +1725,114 @@ def _migrate_knowledge_base_schema(conn, inspector, tables: set[str]) -> None:
                 },
             )
 
-    _split_document_backed_knowledge_bases(conn, tables)
+    _restore_split_document_backed_knowledge_bases(conn, tables)
 
 
-def _split_document_backed_knowledge_bases(conn, tables: set[str]) -> None:
+def _restore_split_document_backed_knowledge_bases(conn, tables: set[str]) -> int:
+    """Undo the legacy one-document-per-base migration after multi-file bases became supported."""
+    required_tables = {"knowledge_bases", "knowledge_base_versions", "knowledge_documents"}
+    if not required_tables.issubset(tables):
+        return 0
+
+    targets = conn.execute(
+        text(
+            """
+            SELECT id, metadata_json
+            FROM knowledge_bases
+            WHERE status != 'deleted'
+            """
+        )
+    ).mappings().all()
+    restored = 0
+    for target in targets:
+        metadata = _json_object(target.get("metadata_json"))
+        source_id = str(metadata.get("split_from_knowledge_base_id") or "").strip()
+        document_id = str(metadata.get("source_document_id") or "").strip()
+        target_id = str(target["id"])
+        if not source_id or not document_id or source_id == target_id:
+            continue
+
+        source_exists = conn.execute(
+            text(
+                """
+                SELECT id
+                FROM knowledge_bases
+                WHERE id = :source_id AND status != 'deleted'
+                """
+            ),
+            {"source_id": source_id},
+        ).first()
+        source_version_id = conn.execute(
+            text(
+                """
+                SELECT id
+                FROM knowledge_base_versions
+                WHERE knowledge_base_id = :source_id AND status != 'deleted'
+                ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, updated_at DESC, id
+                LIMIT 1
+                """
+            ),
+            {"source_id": source_id},
+        ).scalar_one_or_none()
+        document_base_id = conn.execute(
+            text("SELECT knowledge_base_id FROM knowledge_documents WHERE id = :document_id"),
+            {"document_id": document_id},
+        ).scalar_one_or_none()
+        if (
+            not source_exists
+            or not source_version_id
+            or document_base_id not in {target_id, source_id}
+        ):
+            continue
+
+        if document_base_id == target_id:
+            _move_document_knowledge_rows(
+                conn,
+                tables,
+                document_id,
+                source_id,
+                str(source_version_id),
+            )
+        if "agent_knowledge_branches" in tables:
+            conn.execute(
+                text(
+                    """
+                    UPDATE agent_knowledge_branches
+                    SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
+                    WHERE knowledge_base_id = :target_id AND status != 'deleted'
+                    """
+                ),
+                {"target_id": target_id},
+            )
+        conn.execute(
+            text(
+                """
+                UPDATE knowledge_base_versions
+                SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
+                WHERE knowledge_base_id = :target_id AND status != 'deleted'
+                """
+            ),
+            {"target_id": target_id},
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE knowledge_bases
+                SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
+                WHERE id = :target_id AND status != 'deleted'
+                """
+            ),
+            {"target_id": target_id},
+        )
+        conn.execute(
+            text("UPDATE knowledge_bases SET updated_at = CURRENT_TIMESTAMP WHERE id = :source_id"),
+            {"source_id": source_id},
+        )
+        restored += 1
+    return restored
+
+
+def _legacy_split_document_backed_knowledge_bases(conn, tables: set[str]) -> None:
     required_tables = {"knowledge_bases", "knowledge_base_versions", "knowledge_documents"}
     if not required_tables.issubset(tables):
         return

@@ -17,13 +17,13 @@ const OUTLINE_BUTTON_CLASS =
 
 const REQUIRED_PERMISSIONS = [
   '读取用户发给机器人的单聊消息（im:message.p2p_msg:readonly）',
-  '接收群聊中 @ 机器人消息事件（im:message.group_at_msg:readonly）',
   '以应用的身份发消息（im:message:send_as_bot）',
   '查看消息表情回复（im:message.reactions:read）',
   '发送、删除消息表情回复（im:message.reactions:write_only）',
 ];
 
 const REMOVABLE_PERMISSIONS = [
+  '接收群聊中 @ 机器人消息事件（im:message.group_at_msg:readonly）',
   '任务-创建、更新任务或清单时可指定的人员范围 数据权限范围',
   '邮箱-用户邮箱管理 数据权限范围',
   '邮箱-邮件数据 数据权限范围',

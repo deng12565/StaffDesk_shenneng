@@ -157,6 +157,7 @@ class MCPDiscoveredTool(BaseModel):
     imported: bool = False
     tool_id: Optional[str] = None
     enabled: Optional[bool] = None
+    in_current_scope: bool = False
 
 
 class MCPServerRead(BaseModel):
@@ -169,9 +170,21 @@ class MCPServerRead(BaseModel):
     connection: MCPServerConnection
     enabled: bool
     last_synced_at: Optional[str] = None
+    # 最近一次成功发现缓存中的远端工具数；None 表示尚无可用缓存。
+    available_tool_count: Optional[int] = None
+    # 租户内已持久化的 Tool 行数，保留既有字段语义。
     tool_count: int = 0
     created_at: str
     updated_at: str
+
+
+class MCPToolInventoryRead(BaseModel):
+    cache_available: bool = False
+    available_count: Optional[int] = None
+    imported_count: int = 0
+    current_scope_count: int = 0
+    current_scope_is_overall: bool = True
+    tools: list[MCPDiscoveredTool] = Field(default_factory=list)
 
 
 class MCPDiscoverRequest(BaseModel):

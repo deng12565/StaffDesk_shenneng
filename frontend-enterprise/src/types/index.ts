@@ -389,6 +389,7 @@ export type MCPServerRead = {
   connection: MCPServerConnection;
   enabled: boolean;
   last_synced_at?: string | null;
+  available_tool_count?: number | null;
   tool_count: number;
   created_at: string;
   updated_at: string;
@@ -402,12 +403,22 @@ export type MCPDiscoveredTool = {
   imported: boolean;
   tool_id?: string | null;
   enabled?: boolean | null;
+  in_current_scope: boolean;
 };
 
 export type MCPDiscoverResponse = {
   success: boolean;
   tools: MCPDiscoveredTool[];
   error?: { code: string; message: string } | null;
+};
+
+export type MCPToolInventoryRead = {
+  cache_available: boolean;
+  available_count: number | null;
+  imported_count: number;
+  current_scope_count: number;
+  current_scope_is_overall: boolean;
+  tools: MCPDiscoveredTool[];
 };
 
 export type MCPSyncResponse = {

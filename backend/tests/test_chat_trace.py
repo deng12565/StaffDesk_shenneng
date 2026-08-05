@@ -471,6 +471,45 @@ def test_turn_trace_replaces_internal_no_scene_reason_with_user_facing_copy() ->
     assert decision["detail"] == "未匹配到业务流程，继续使用可用知识和工具处理。"
 
 
+def test_turn_trace_explains_empty_knowledge_result() -> None:
+    started_at = datetime(2026, 7, 15, 14, 36, 0)
+    messages = [
+        Message(
+            id="msg_user",
+            tenant_id="tenant_demo",
+            session_id="session_test",
+            role="user",
+            content="查询制度",
+            created_at=started_at,
+        )
+    ]
+    events = [
+        AgentEvent(
+            tenant_id="tenant_demo",
+            session_id="session_test",
+            event_type="user_message_received",
+            payload_json={"message_id": "msg_user", "message": "查询制度"},
+            created_at=started_at,
+        ),
+        AgentEvent(
+            tenant_id="tenant_demo",
+            session_id="session_test",
+            event_type="knowledge_result",
+            payload_json={
+                "query": {"query": "查询制度"},
+                "turn_id": "msg_user",
+                "user_message_id": "msg_user",
+            },
+            created_at=started_at + timedelta(seconds=1),
+        )
+    ]
+
+    traces = _build_turn_traces(messages, events, {})
+
+    knowledge = next(line for line in traces[0]["lines"] if line["kind"] == "knowledge")
+    assert knowledge["detail"] == "未命中可引用的业务资料"
+
+
 def test_turn_trace_merges_created_and_relayed_reflection_decisions() -> None:
     started_at = datetime(2026, 7, 15, 14, 37, 5)
     messages = [

@@ -175,7 +175,7 @@ export const CHAT_EMPTY_ROLE_CLASS = 'line-clamp-2 text-[12px] capitalize leadin
 export const CHAT_EMPTY_TAGS_CLASS =
   'flex flex-wrap items-center gap-[10px] [&>span]:rounded-[10px] [&>span]:border-[0.5px] [&>span]:border-[#e3e7f1] [&>span]:px-[10px] [&>span]:py-[4px] [&>span]:text-[10px] [&>span]:capitalize [&>span]:text-[#757f9c]';
 export const CHAT_EMPTY_STAT_CELL_CLASS =
-  'flex flex-1 flex-col justify-center gap-[4px] border-[0.5px] border-[#e3e7f1] px-[20px] py-[8px] capitalize text-[#464c5e] first:rounded-l-[14px] last:rounded-r-[14px] [&:not(:first-child)]:ml-[-0.5px]';
+  'flex min-w-0 flex-1 flex-col justify-center gap-[4px] border-[0.5px] border-[#e3e7f1] px-[12px] py-[8px] capitalize text-[#464c5e] first:rounded-l-[14px] last:rounded-r-[14px] [&:not(:first-child)]:ml-[-0.5px]';
 
 // ---------------------------------------------------------------------------
 // Composer

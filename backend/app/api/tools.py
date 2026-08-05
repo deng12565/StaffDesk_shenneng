@@ -45,6 +45,7 @@ from app.tools.tool_schema import (
     MCPServerCreateRequest,
     MCPServerRead,
     MCPServerUpdateRequest,
+    MCPToolInventoryRead,
     MCPSyncRequest,
     MCPSyncResponse,
     ToolBucketRead,
@@ -624,6 +625,7 @@ def _connection_to_client_config(connection: MCPServerConnection) -> dict[str, A
 
 def mcp_server_read(row: MCPServer, db: Session) -> MCPServerRead:
     tool_count = len(db.exec(select(Tool.id).where(Tool.mcp_server_id == row.id)).all())
+    cache_available = bool(row.discovered_tools_json) or row.last_synced_at is not None
     return MCPServerRead(
         id=row.id,
         tenant_id=row.tenant_id,
@@ -634,6 +636,7 @@ def mcp_server_read(row: MCPServer, db: Session) -> MCPServerRead:
         connection=_server_connection(row),
         enabled=row.enabled,
         last_synced_at=row.last_synced_at.isoformat() if row.last_synced_at else None,
+        available_tool_count=len(row.discovered_tools_json or []) if cache_available else None,
         tool_count=tool_count,
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
@@ -701,6 +704,70 @@ def get_mcp_server(
 ) -> MCPServerRead:
     row = _get_mcp_server(db, tenant_id, server_id)
     return mcp_server_read(row, db)
+
+
+@mcp_router.get(
+    "/{server_id}/tool-inventory",
+    response_model=MCPToolInventoryRead,
+    dependencies=[Depends(require_tenant_admin)],
+)
+def get_mcp_tool_inventory(
+    server_id: str,
+    tenant_id: str = Query(...),
+    agent_id: str | None = Query(default=None),
+    db: Session = Depends(get_session),
+) -> MCPToolInventoryRead:
+    """读取最近一次发现缓存，并合并本地导入与当前员工可见状态。"""
+    row = _get_mcp_server(db, tenant_id, server_id)
+    agent = get_agent(db, tenant_id, agent_id)
+    if agent_id and agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    imported_by_name = _server_tools_by_leaf_name(db, server_id)
+    visible_tool_ids = {
+        tool.id for tool in _visible_tool_rows(db, tenant_id, agent_id=agent_id)
+    }
+    current_scope_is_overall = agent is None or agent.is_overall
+    cached_tools = row.discovered_tools_json or []
+    cache_available = bool(cached_tools) or row.last_synced_at is not None
+    tools: list[MCPDiscoveredTool] = []
+    for item in cached_tools:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        imported = imported_by_name.get(name)
+        tools.append(
+            MCPDiscoveredTool(
+                name=name,
+                description=str(item.get("description") or ""),
+                input_schema=item.get("input_schema") or {},
+                output_schema=item.get("output_schema") or {},
+                imported=imported is not None,
+                tool_id=imported.id if imported else None,
+                enabled=imported.enabled if imported else None,
+                in_current_scope=bool(
+                    imported
+                    and (current_scope_is_overall or imported.id in visible_tool_ids)
+                ),
+            )
+        )
+
+    return MCPToolInventoryRead(
+        cache_available=cache_available,
+        available_count=len(tools) if cache_available else None,
+        imported_count=len(imported_by_name),
+        current_scope_count=(
+            len(imported_by_name)
+            if current_scope_is_overall
+            else sum(
+                1
+                for imported in imported_by_name.values()
+                if imported.id in visible_tool_ids
+            )
+        ),
+        current_scope_is_overall=current_scope_is_overall,
+        tools=tools,
+    )
 
 
 @mcp_router.put("/{server_id}", response_model=MCPServerRead)
@@ -788,6 +855,9 @@ def discover_mcp_tools(
     response = _discover_response(connection)
     if response.success:
         row.discovered_tools_json = [tool.model_dump() for tool in response.tools]
+        # The existing timestamp also distinguishes a successful empty discovery
+        # from a server that has never been discovered, without a schema migration.
+        row.last_synced_at = utc_now()
         row.updated_at = utc_now()
         db.add(row)
         db.commit()

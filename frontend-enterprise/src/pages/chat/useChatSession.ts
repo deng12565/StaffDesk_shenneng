@@ -97,6 +97,7 @@ import {
   normalizeTraceTool,
   parseMessageTime,
   persistSessionReadTimes,
+  publicRouterDecisionReason,
   publicStreamPhase,
   reflectionTraceDetail,
   routerDecisionTraceLine,
@@ -531,11 +532,13 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       { label: '资料', value: agentResourceCount(displayedAgent, 'knowledge_base') },
       { label: '技能', value: agentResourceCount(displayedAgent, 'general_skill') },
       { label: 'SOP', value: agentResourceCount(displayedAgent, 'skill') },
+      { label: '工具', value: agentResourceCount(displayedAgent, 'tool') },
     ]
     : [
       { label: '资料', value: 0 },
       { label: '技能', value: 0 },
       { label: 'SOP', value: 0 },
+      { label: '工具', value: 0 },
     ];
   const sessionFilterOptions = useMemo(() => {
     const counts = new Map<string, number>();
@@ -2245,7 +2248,9 @@ export function useChatSession(options: UseChatSessionOptions = {}) {
       }
       const result = item.data as unknown as ChatTurnResponse;
       const userIntent = typeof result.router_decision?.user_intent === 'string' ? result.router_decision.user_intent : '';
-      const decisionReason = typeof result.router_decision?.reason === 'string' ? result.router_decision.reason : '';
+      const decisionReason = publicRouterDecisionReason(
+        typeof result.router_decision?.reason === 'string' ? result.router_decision.reason : '',
+      );
       if (userIntent || decisionReason) {
         upsertVisibleTraceLine({
           id: 'decision_router',

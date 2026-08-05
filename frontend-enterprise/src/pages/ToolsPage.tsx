@@ -2,7 +2,7 @@ import { ApiOutlined, CheckOutlined, ExperimentOutlined, ToolOutlined } from '..
 import type { ReactNode } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { Copy, FlaskConical, Users } from 'lucide-react';
+import { Copy, Eye, FlaskConical, Users } from 'lucide-react';
 import { pinyin } from 'pinyin-pro';
 
 import { api, TENANT_ID } from '../api/client';
@@ -14,12 +14,19 @@ import { Paginator } from '@/components/Paginator';
 import { ResourceImportDialog } from '@/components/ResourceImportDialog';
 import { StatCard } from '@/components/StatCard';
 import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
   Checkbox,
+  Dialog,
+  DialogContent,
+  DialogTitle,
   Input,
   Select as UISelect,
   SelectContent,
@@ -27,6 +34,9 @@ import {
   SelectTrigger,
   SelectValue,
   Switch,
+  Tabs,
+  TabsList,
+  TabsTrigger,
   Textarea,
 } from '@/components/ui';
 import { Button as UIButton } from '@/components/ui/button';
@@ -70,6 +80,7 @@ import type {
   MCPSyncResponse,
   MCPTransport,
   MCPDiscoveredTool,
+  MCPToolInventoryRead,
 } from '../types';
 
 type ToolPageProps = {
@@ -127,11 +138,12 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
   const [servers, setServers] = useState<MCPServerRead[]>([]);
   const [serverDeleteTarget, setServerDeleteTarget] = useState<MCPServerRead | null>(null);
   const [deletingServer, setDeletingServer] = useState(false);
+  const [selectedMcpServerId, setSelectedMcpServerId] = useState('');
+  const [mcpToolSearch, setMcpToolSearch] = useState('');
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const pageTitle = isOverallAgent ? '工具广场' : '工具';
-  const listLabel = isOverallAgent ? '工具广场列表' : '员工工具';
   const currentAgent = useMemo(() => agents.find((item) => item.id === agentId), [agents, agentId]);
   const canManageCurrentScope = currentAgent
     ? canManageEmployeeAgent(currentAgent, currentUser)
@@ -215,24 +227,59 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     ],
     [bucketStats],
   );
-  const filteredRows = useMemo(() => {
-    const text = searchText.trim().toLowerCase();
-    return visibleRows.filter((row) => {
+  const serverIds = useMemo(() => new Set(servers.map((server) => server.id)), [servers]);
+  const mcpToolsByServerId = useMemo(() => {
+    const grouped = new Map<string, ToolRead[]>();
+    for (const row of rows) {
+      if (row.tool_type !== 'mcp' || !row.mcp_server_id || !serverIds.has(row.mcp_server_id)) continue;
+      const group = grouped.get(row.mcp_server_id) || [];
+      group.push(row);
+      grouped.set(row.mcp_server_id, group);
+    }
+    return grouped;
+  }, [rows, serverIds]);
+  const standaloneRows = useMemo(
+    () => visibleRows.filter((row) => (
+      row.tool_type !== 'mcp'
+      || !row.mcp_server_id
+      || !serverIds.has(row.mcp_server_id)
+    )),
+    [serverIds, visibleRows],
+  );
+  const searchKey = searchText.trim().toLowerCase();
+  const serverChildSearchMatchCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    if (!searchKey) return counts;
+    for (const server of servers) {
+      const matchingChildren = (mcpToolsByServerId.get(server.id) || [])
+        .filter((tool) => toolMatchesSearch(tool, searchKey));
+      if (matchingChildren.length) counts.set(server.id, matchingChildren.length);
+    }
+    return counts;
+  }, [mcpToolsByServerId, searchKey, servers]);
+  const visibleServers = useMemo(() => servers.filter((server) => {
+    const children = mcpToolsByServerId.get(server.id) || [];
+    const bucketMatch = bucketFilter === '__all__'
+      || (server.bucket || '未分桶') === bucketFilter
+      || children.some((tool) => (tool.bucket || '未分桶') === bucketFilter);
+    if (!bucketMatch) return false;
+    if (!searchKey) return true;
+    return serverMatchesSearch(server, searchKey)
+      || (serverChildSearchMatchCounts.get(server.id) || 0) > 0;
+  }), [bucketFilter, mcpToolsByServerId, searchKey, serverChildSearchMatchCounts, servers]);
+  const filteredStandaloneRows = useMemo(() => {
+    return standaloneRows.filter((row) => {
       const bucketMatch = bucketFilter === '__all__' || (row.bucket || '未分桶') === bucketFilter;
       if (!bucketMatch) return false;
-      if (!text) return true;
-      return [
-        row.name,
-        row.display_name || '',
-        row.description || '',
-        row.bucket || '',
-        row.url,
-        resourceCreatorName(row),
-      ].some((value) => value.toLowerCase().includes(text));
+      return !searchKey || toolMatchesSearch(row, searchKey);
     });
-  }, [bucketFilter, searchText, visibleRows]);
+  }, [bucketFilter, searchKey, standaloneRows]);
 
-  const pagination = useClientPagination(filteredRows, TOOL_PAGE_SIZE, `${searchText}|${bucketFilter}|${isOverallAgent}`);
+  const pagination = useClientPagination(
+    filteredStandaloneRows,
+    TOOL_PAGE_SIZE,
+    `${searchText}|${bucketFilter}|${isOverallAgent}`,
+  );
 
   const stats = useMemo(
     () => ({
@@ -243,7 +290,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     [visibleRows, bucketStats],
   );
 
-  // 工具集是租户级的,员工范围内只展示该员工已导入其工具的服务器,数量也按员工可见口径算
+  // MCP Server 是租户级资产；员工范围只改变“已添加”数量与移除行为。
   const agentServerToolCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const row of rows) {
@@ -252,9 +299,52 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     }
     return counts;
   }, [rows]);
-  const visibleServers = servers;
-  const serverToolCount = (row: MCPServerRead) =>
+  const serverScopeToolCount = (row: MCPServerRead) =>
     isOverallAgent ? row.tool_count : agentServerToolCounts.get(row.id) || 0;
+  const selectedMcpServer = servers.find((server) => server.id === selectedMcpServerId) || null;
+  const selectedMcpTools = selectedMcpServer
+    ? mcpToolsByServerId.get(selectedMcpServer.id) || []
+    : [];
+  const mcpToolSearchKey = mcpToolSearch.trim().toLowerCase();
+  const filteredSelectedMcpTools = selectedMcpTools.filter(
+    (tool) => !mcpToolSearchKey || toolMatchesSearch(tool, mcpToolSearchKey),
+  );
+  const mcpToolPagination = useClientPagination(
+    filteredSelectedMcpTools,
+    TOOL_PAGE_SIZE,
+    `${selectedMcpServerId}|${mcpToolSearch}`,
+  );
+
+  function openMcpTools(server: MCPServerRead) {
+    const matchedChildren = serverChildSearchMatchCounts.get(server.id) || 0;
+    setSelectedMcpServerId(server.id);
+    setMcpToolSearch(matchedChildren > 0 ? searchText : '');
+  }
+
+  const renderServerToolCounts = (row: MCPServerRead) => (
+    <span className="flex flex-col gap-[2px] leading-[18px]">
+      <span className="font-medium text-[#18181a]">
+        {row.available_tool_count == null ? '尚未发现' : `已发现 ${row.available_tool_count} 个`}
+      </span>
+      <span className="text-[11px] text-[#858b9c]">
+        {isOverallAgent
+          ? `系统已导入 ${row.tool_count} 个`
+          : `当前员工已添加 ${agentServerToolCounts.get(row.id) || 0} 个`}
+      </span>
+      {(mcpToolsByServerId.get(row.id)?.length || 0) > 0 && (
+        <button
+          type="button"
+          onClick={() => openMcpTools(row)}
+          className="mt-[3px] flex w-fit items-center gap-[4px] whitespace-nowrap text-[11px] font-medium text-[#1a71ff] hover:text-[#4a8dff]"
+        >
+          <Eye className="size-[12px] shrink-0" />
+          {serverChildSearchMatchCounts.get(row.id)
+            ? `查看匹配工具（${serverChildSearchMatchCounts.get(row.id)}）`
+            : `${isOverallAgent ? '查看已导入工具' : '查看已添加工具'}（${mcpToolsByServerId.get(row.id)?.length || 0}）`}
+        </button>
+      )}
+    </span>
+  );
 
   async function confirmDelete() {
     const row = deleteTarget;
@@ -540,7 +630,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     {
       key: 'name',
       title: '名称',
-      width: 240,
+      width: 220,
       render: (row) => (
         <div className="flex min-w-0 flex-col gap-[4px]">
           <span className="flex w-full min-w-0 items-center gap-[6px]">
@@ -574,8 +664,8 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
     {
       key: 'tool_count',
       title: '工具数',
-      width: 110,
-      render: (row) => <span className="text-[#858b9c]">{serverToolCount(row)} 个工具</span>,
+      width: 170,
+      render: (row) => renderServerToolCounts(row),
     },
     {
       key: 'enabled',
@@ -642,8 +732,8 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
   );
 
   const listEmptyText = isOverallAgent
-    ? canManageCurrentScope ? '暂无工具，点击「新增」创建一个吧' : '暂无工具'
-    : '当前员工暂无工具';
+    ? canManageCurrentScope ? '暂无独立工具，点击「新增」创建一个吧' : '暂无独立工具'
+    : '当前员工暂无独立工具';
 
   return (
     <div className="min-h-full box-border px-[48px] pt-[32px] pb-[43px] max-[900px]:px-[16px]">
@@ -697,7 +787,45 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
           <StatCard label="分桶" value={stats.buckets} className="basis-[220px]" />
         </div>
 
-        {visibleServers.length > 0 && (
+        <div className="flex flex-wrap items-center gap-[16px]" aria-label="工具筛选">
+          <label className="flex h-[34px] w-[300px] items-center gap-[8px] overflow-hidden rounded-[10px] border-[0.5px] border-[#e3e7f1] bg-white px-[12px] transition-colors focus-within:border-[#18181a] max-[900px]:w-full">
+            <IconSearch className="size-[14px] shrink-0 text-[#858b9c]" />
+            <input
+              autoComplete="off"
+              data-1p-ignore="true"
+              data-lpignore="true"
+              data-bwignore="true"
+              value={searchText}
+              placeholder="搜索工具集、工具名称、描述或分桶"
+              onChange={(event) => setSearchText(event.target.value)}
+              className="h-full min-w-0 flex-1 bg-transparent text-[12px] text-[#17191f] outline-none placeholder:text-[#c0c6d4]"
+            />
+            {searchText && (
+              <button
+                type="button"
+                aria-label="清除搜索"
+                onClick={() => setSearchText('')}
+                className="grid size-[16px] shrink-0 place-items-center text-[#c0c6d4] hover:text-[#858b9c]"
+              >
+                <IconClear className="size-[14px]" />
+              </button>
+            )}
+          </label>
+          <UISelect value={bucketFilter} onValueChange={setBucketFilter}>
+            <SelectTrigger className={cn(SELECT_TRIGGER_CLASS, 'w-[180px]')} aria-label="分桶筛选">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {bucketSelectOptions.map((item) => (
+                <SelectItem key={item.value} value={item.value}>
+                  {item.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </UISelect>
+        </div>
+
+        {servers.length > 0 && (
           <div className="flex flex-col gap-[18px]">
             <div className="flex items-center gap-[6px] px-[12px] text-[#757f9c]">
               <ApiOutlined className="size-[14px] shrink-0" />
@@ -710,11 +838,11 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
                 data={visibleServers}
                 rowKey={(row) => row.id}
                 loading={loading}
-                emptyText="暂无 MCP 服务器"
+                emptyText="没有符合条件的 MCP 工具集"
               />
             </div>
             <div className="grid gap-[10px] md:hidden">
-              {visibleServers.map((row) => (
+              {visibleServers.length ? visibleServers.map((row) => (
                 <article className={MOBILE_CARD_CLASS} key={row.id}>
                   <div className="flex min-w-0 items-start justify-between gap-[10px]">
                     <div className="min-w-0">
@@ -730,12 +858,32 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
                   <div className="mt-[8px] flex flex-wrap items-center gap-[6px]">
                     <StatusBadge tone="gray">{transportLabel(row.connection.transport)}</StatusBadge>
                     <StatusBadge tone={row.enabled ? 'green' : 'gray'}>{row.enabled ? '已启用' : '已停用'}</StatusBadge>
-                    <StatusBadge tone="gray">{serverToolCount(row)} 个工具</StatusBadge>
+                    <StatusBadge tone="gray">
+                      {row.available_tool_count == null ? '尚未发现' : `已发现 ${row.available_tool_count} 个`}
+                    </StatusBadge>
+                    <StatusBadge tone="gray">
+                      {isOverallAgent
+                        ? `系统已导入 ${row.tool_count} 个`
+                        : `当前员工已添加 ${agentServerToolCounts.get(row.id) || 0} 个`}
+                    </StatusBadge>
                   </div>
                   <p className="mt-[8px] line-clamp-1 wrap-break-word text-[12px] text-[#858b9c]">
                     {serverEndpoint(row.connection)}
                   </p>
-                  <div className="mt-[10px] flex items-center gap-[8px]">
+                  <div className="mt-[10px] flex flex-wrap items-center gap-[8px]">
+                    {(mcpToolsByServerId.get(row.id)?.length || 0) > 0 && (
+                      <UIButton
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openMcpTools(row)}
+                        className={RETURN_BUTTON_CLASS}
+                      >
+                        <Eye className="size-[14px] shrink-0" />
+                        {serverChildSearchMatchCounts.get(row.id)
+                          ? `匹配工具（${serverChildSearchMatchCounts.get(row.id)}）`
+                          : `查看工具（${mcpToolsByServerId.get(row.id)?.length || 0}）`}
+                      </UIButton>
+                    )}
                     <UIButton
                       variant="outline"
                       size="sm"
@@ -757,7 +905,11 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
                     )}
                   </div>
                 </article>
-              ))}
+              )) : (
+                <div className="py-[32px] text-center text-[13px] text-[#858b9c]">
+                  没有符合条件的 MCP 工具集
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -765,49 +917,11 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
         <div className="flex flex-col gap-[18px]">
           <div className="flex items-center gap-[6px] px-[12px] text-[#757f9c]">
             <IconBriefcase className="size-[14px] shrink-0" />
-            <span className="text-[14px] font-normal leading-none">{listLabel}</span>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-[16px]">
-            <label className="flex h-[34px] w-[300px] items-center gap-[8px] overflow-hidden rounded-[10px] border-[0.5px] border-[#e3e7f1] bg-white px-[12px] transition-colors focus-within:border-[#18181a] max-[900px]:w-full">
-              <IconSearch className="size-[14px] shrink-0 text-[#858b9c]" />
-              <input
-                autoComplete="off"
-                data-1p-ignore="true"
-                data-lpignore="true"
-                data-bwignore="true"
-                value={searchText}
-                placeholder="搜索工具名称、描述、URL 或分桶"
-                onChange={(event) => setSearchText(event.target.value)}
-                className="h-full min-w-0 flex-1 bg-transparent text-[12px] text-[#17191f] outline-none placeholder:text-[#c0c6d4]"
-              />
-              {searchText && (
-                <button
-                  type="button"
-                  aria-label="清除搜索"
-                  onClick={() => setSearchText('')}
-                  className="grid size-[16px] shrink-0 place-items-center text-[#c0c6d4] hover:text-[#858b9c]"
-                >
-                  <IconClear className="size-[14px]" />
-                </button>
-              )}
-            </label>
-            <UISelect value={bucketFilter} onValueChange={setBucketFilter}>
-              <SelectTrigger className={cn(SELECT_TRIGGER_CLASS, 'w-[180px]')} aria-label="分桶筛选">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {bucketSelectOptions.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </UISelect>
+            <span className="text-[14px] font-normal leading-none">独立工具</span>
           </div>
 
           <div className="grid gap-[10px] md:hidden">
-            {filteredRows.length ? (
+            {filteredStandaloneRows.length ? (
               pagination.pagedItems.map(renderMobileCard)
             ) : (
               <div className="py-[40px] text-center text-[13px] text-[#858b9c]">{listEmptyText}</div>
@@ -825,7 +939,7 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
             />
           </div>
 
-          {filteredRows.length > 0 && (
+          {filteredStandaloneRows.length > 0 && (
             <Paginator
               aria-label="工具分页"
               className="mt-0 mb-[6px]"
@@ -836,6 +950,99 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
           )}
         </div>
       </div>
+
+      <Dialog
+        open={Boolean(selectedMcpServer)}
+        onOpenChange={(open) => {
+          if (open) return;
+          setSelectedMcpServerId('');
+          setMcpToolSearch('');
+        }}
+      >
+        <DialogContent
+          aria-describedby={undefined}
+          className="flex max-h-[calc(100dvh-32px)] w-[calc(100%-32px)] flex-col gap-0 overflow-hidden rounded-[14px] p-0 sm:max-w-[760px]"
+        >
+          <div className="border-b border-[#eceef1] px-[20px] py-[16px] pr-[52px]">
+            <div className="flex min-w-0 items-center gap-[8px]">
+              <ApiOutlined className="size-[15px] shrink-0 text-[#757f9c]" />
+              <DialogTitle className="min-w-0 truncate text-[15px] font-semibold leading-[20px] text-[#18181a]">
+                {selectedMcpServer?.display_name || selectedMcpServer?.name || 'MCP 工具集'}
+              </DialogTitle>
+              <StatusBadge tone="blue">{selectedMcpTools.length} 个工具</StatusBadge>
+            </div>
+            <p className="mt-[6px] line-clamp-2 wrap-break-word text-[12px] leading-[1.6] text-[#858b9c]">
+              {selectedMcpServer?.description || '暂无工具集描述'}
+            </p>
+          </div>
+
+          <div className="flex min-h-0 flex-1 flex-col gap-[12px] px-[20px] py-[16px]">
+            <label className="flex h-[34px] w-full items-center gap-[8px] overflow-hidden rounded-[10px] border-[0.5px] border-[#e3e7f1] bg-white px-[12px] transition-colors focus-within:border-[#18181a]">
+              <IconSearch className="size-[14px] shrink-0 text-[#858b9c]" />
+              <input
+                autoComplete="off"
+                value={mcpToolSearch}
+                aria-label="搜索工具集内工具"
+                placeholder="搜索工具名称或描述"
+                onChange={(event) => setMcpToolSearch(event.target.value)}
+                className="h-full min-w-0 flex-1 bg-transparent text-[12px] text-[#17191f] outline-none placeholder:text-[#c0c6d4]"
+              />
+              {mcpToolSearch && (
+                <button
+                  type="button"
+                  aria-label="清除工具集搜索"
+                  onClick={() => setMcpToolSearch('')}
+                  className="grid size-[16px] shrink-0 place-items-center text-[#c0c6d4] hover:text-[#858b9c]"
+                >
+                  <IconClear className="size-[14px]" />
+                </button>
+              )}
+            </label>
+
+            <div className="min-h-0 flex-1 overflow-y-auto border-y border-[#eceef1]" role="list" aria-label="工具集内工具">
+              {mcpToolPagination.pagedItems.length ? mcpToolPagination.pagedItems.map((tool) => (
+                <div
+                  key={tool.id}
+                  role="listitem"
+                  className="flex min-w-0 items-start gap-[10px] border-b border-[#eceef1] px-[2px] py-[12px] last:border-b-0"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 flex-wrap items-center gap-[6px]">
+                      <strong className="min-w-0 wrap-break-word text-[13px] font-medium text-[#18181a]">
+                        {tool.display_name || tool.name}
+                      </strong>
+                      <StatusBadge tone={tool.enabled ? 'green' : 'gray'}>
+                        {tool.enabled ? '已启用' : '已停用'}
+                      </StatusBadge>
+                    </div>
+                    <span className="mt-[2px] block truncate text-[11px] text-[#858b9c]" title={tool.name}>
+                      {tool.name}
+                    </span>
+                    <p className="mt-[5px] line-clamp-2 wrap-break-word text-[12px] leading-[1.6] text-[#667085]">
+                      {tool.description || '暂无描述'}
+                    </p>
+                  </div>
+                  <div className="shrink-0">{renderActions(tool)}</div>
+                </div>
+              )) : (
+                <div className="grid min-h-[180px] place-items-center px-[16px] text-center text-[13px] text-[#858b9c]">
+                  {selectedMcpTools.length ? '没有符合条件的工具' : '当前范围暂无该工具集的工具'}
+                </div>
+              )}
+            </div>
+
+            {filteredSelectedMcpTools.length > 0 && (
+              <Paginator
+                aria-label="工具集工具分页"
+                className="my-0"
+                page={mcpToolPagination.page}
+                pageCount={mcpToolPagination.pageCount}
+                onChange={mcpToolPagination.setPage}
+              />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <ResourceImportDialog
         open={importOpen}
@@ -906,8 +1113,8 @@ export default function ToolsPage({ currentUser, onLogout }: ToolPageProps = {})
         }
         description={
           isOverallAgent
-            ? `其下 ${serverDeleteTarget ? serverToolCount(serverDeleteTarget) : 0} 个已导入工具将一并删除，操作不可撤销。`
-            : `将从当前员工移除该工具集的 ${serverDeleteTarget ? serverToolCount(serverDeleteTarget) : 0} 个工具，工具集本身和其他员工不受影响。`
+            ? `其下 ${serverDeleteTarget ? serverScopeToolCount(serverDeleteTarget) : 0} 个已导入工具将一并删除，操作不可撤销。`
+            : `将从当前员工移除该工具集的 ${serverDeleteTarget ? serverScopeToolCount(serverDeleteTarget) : 0} 个工具，工具集本身和其他员工不受影响。`
         }
         confirmText={isOverallAgent ? '删除' : '移除'}
         onConfirm={() => void confirmDeleteServer()}
@@ -1311,6 +1518,7 @@ const MCP_FORM_INITIAL_VALUES: McpFormValues = {
 };
 
 type DiscoveredRow = MCPDiscoverResponse['tools'][number] & { selected: boolean };
+type ToolInventoryFilter = 'all' | 'unadded' | 'added';
 
 function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'edit' } & ToolPageProps) {
   const [values, setValues] = useState<McpFormValues>({ ...MCP_FORM_INITIAL_VALUES });
@@ -1320,6 +1528,10 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
   const [discovering, setDiscovering] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoveredRow[]>([]);
+  const [inventory, setInventory] = useState<MCPToolInventoryRead | null>(null);
+  const [toolSearch, setToolSearch] = useState('');
+  const [toolFilter, setToolFilter] = useState<ToolInventoryFilter>('all');
+  const [discoveryError, setDiscoveryError] = useState('');
   const navigate = useNavigate();
   const { serverId } = useParams();
   const isEdit = mode === 'edit';
@@ -1332,18 +1544,42 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
       setValues({ ...MCP_FORM_INITIAL_VALUES });
       setServer(null);
       setDiscovered([]);
+      setInventory(null);
+      setDiscoveryError('');
       return;
     }
     if (!serverId) return;
-    setLoading(true);
-    api
-      .get<MCPServerRead>(`/api/enterprise/mcp-servers/${serverId}?tenant_id=${TENANT_ID}`)
-      .then((row) => {
+    let active = true;
+    const loadEditor = async () => {
+      setLoading(true);
+      try {
+        const row = await api.get<MCPServerRead>(
+          `/api/enterprise/mcp-servers/${serverId}?tenant_id=${TENANT_ID}`,
+        );
+        if (!active) return;
         setServer(row);
         setValues(serverToFormValues(row));
-      })
-      .catch((error) => notify.error(error instanceof Error ? error.message : '加载 MCP 服务器失败'))
-      .finally(() => setLoading(false));
+        const cached = await fetchInventory(row.id);
+        if (!active) return;
+        applyInventory(cached);
+        setLoading(false);
+        if (!cached.cache_available) {
+          void discoverConnection(row, row.connection, false);
+        }
+      } catch (error) {
+        if (active) {
+          notify.error(error instanceof Error ? error.message : '加载 MCP 服务器失败');
+        }
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    void loadEditor();
+    return () => {
+      active = false;
+    };
+    // The editor is reloaded only when its route identity changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEdit, serverId]);
 
   const transportOption = TRANSPORT_OPTIONS.find((item) => item.value === values.transport);
@@ -1425,44 +1661,71 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
     }
   }
 
-  async function discover() {
-    // 发现只调用远端 tools/list 并展示结果，不会让员工立刻获得这些工具。
-    // 未保存时用于验证草稿连接；已保存时后端还会标记哪些工具已经导入。
-    const built = buildPayload();
-    if (!built) return;
+  async function fetchInventory(targetServerId: string): Promise<MCPToolInventoryRead> {
+    return api.get<MCPToolInventoryRead>(
+      `/api/enterprise/mcp-servers/${targetServerId}/tool-inventory?tenant_id=${TENANT_ID}${currentAgentQuery()}`,
+    );
+  }
+
+  function applyInventory(next: MCPToolInventoryRead) {
+    setInventory(next);
+    setDiscovered(next.tools.map((tool) => ({ ...tool, selected: false })));
+  }
+
+  async function discoverConnection(
+    targetServer: MCPServerRead | null,
+    connection: MCPServerConnection,
+    hadCache: boolean,
+  ) {
     setDiscovering(true);
+    setDiscoveryError('');
     try {
-      const response = server
-        ? await api.post<MCPDiscoverResponse>(`/api/enterprise/mcp-servers/${server.id}/discover`, {
+      const response = targetServer
+        ? await api.post<MCPDiscoverResponse>(`/api/enterprise/mcp-servers/${targetServer.id}/discover`, {
             tenant_id: TENANT_ID,
-            connection: built.connection,
+            connection,
           })
         : await api.post<MCPDiscoverResponse>('/api/enterprise/mcp-servers/discover', {
             tenant_id: TENANT_ID,
-            connection: built.connection,
+            connection,
           });
       if (!response.success) {
-        notify.error(response.error?.message || '发现工具失败');
+        const message = response.error?.message || '发现工具失败';
+        setDiscoveryError(hadCache ? `刷新失败，仍显示上次结果：${message}` : message);
+        notify.error(message);
         return;
       }
-      setDiscovered(response.tools.map((tool) => ({ ...tool, selected: !tool.imported })));
+      if (targetServer) {
+        applyInventory(await fetchInventory(targetServer.id));
+      } else {
+        setDiscovered(response.tools.map((tool) => ({ ...tool, selected: false })));
+      }
       notify.success(`发现 ${response.tools.length} 个工具`);
     } catch (error) {
-      notify.error(error instanceof Error ? error.message : '发现工具失败');
+      const message = error instanceof Error ? error.message : '发现工具失败';
+      setDiscoveryError(hadCache ? `刷新失败，仍显示上次结果：${message}` : message);
+      notify.error(message);
     } finally {
       setDiscovering(false);
     }
   }
 
-  async function sync() {
+  async function discover() {
+    // 发现只调用远端 tools/list 并展示结果，不会让员工立刻获得这些工具。
+    // 未保存时用于验证草稿连接；已保存时后端还会标记哪些工具已经导入。
+    const built = buildPayload();
+    if (!built) return;
+    await discoverConnection(server, built.connection, Boolean(inventory?.cache_available));
+  }
+
+  async function syncTools(toolNames: string[] | null) {
     // 同步会把选中的远端定义持久化为本地 Tool，并按当前 agent 范围建立绑定；
     // 后续模型看到和调用的是这些 Tool 行，而不是直接读取 MCP Server 配置。
     if (!server) {
       notify.warning('请先保存 MCP 服务器，再同步工具');
       return;
     }
-    const selectedNames = discovered.filter((tool) => tool.selected).map((tool) => tool.name);
-    if (discovered.length > 0 && selectedNames.length === 0) {
+    if (Array.isArray(toolNames) && toolNames.length === 0) {
       notify.warning('请至少选择一个要导入的工具');
       return;
     }
@@ -1473,7 +1736,7 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
         `/api/enterprise/mcp-servers/${server.id}/sync${agentQuery ? `?${agentQuery.slice(1)}` : ''}`,
         {
           tenant_id: TENANT_ID,
-          tool_names: discovered.length ? selectedNames : null,
+          tool_names: toolNames,
         },
       );
       if (!response.success) {
@@ -1482,14 +1745,16 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
       }
       notify.success(`同步完成：新增 ${response.imported.length}，更新 ${response.updated.length}`);
       try {
-        const refreshed = await api.get<MCPServerRead>(
-          `/api/enterprise/mcp-servers/${server.id}?tenant_id=${TENANT_ID}`,
-        );
+        const [refreshed, refreshedInventory] = await Promise.all([
+          api.get<MCPServerRead>(`/api/enterprise/mcp-servers/${server.id}?tenant_id=${TENANT_ID}`),
+          fetchInventory(server.id),
+        ]);
         setServer(refreshed);
+        applyInventory(refreshedInventory);
+        setDiscoveryError('');
       } catch {
         // ignore refresh failure
       }
-      await discover();
     } catch (error) {
       notify.error(error instanceof Error ? error.message : '同步失败');
     } finally {
@@ -1497,51 +1762,49 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
     }
   }
 
-  const discoveredColumns: DataTableColumn<DiscoveredRow>[] = [
-    {
-      key: 'selected',
-      title: '',
-      width: 40,
-      render: (row) => (
-        <Checkbox
-          checked={row.selected}
-          onCheckedChange={(next) =>
-            setDiscovered((prev) =>
-              prev.map((item) => (item.name === row.name ? { ...item, selected: next === true } : item)),
-            )
-          }
-          aria-label={`选择 ${row.name}`}
-        />
+  const searchKey = toolSearch.trim().toLowerCase();
+  const filteredDiscovered = discovered.filter((tool) => {
+    if (toolFilter === 'added' && !tool.in_current_scope) return false;
+    if (toolFilter === 'unadded' && tool.in_current_scope) return false;
+    if (!searchKey) return true;
+    return `${tool.name}\n${tool.description}`.toLowerCase().includes(searchKey);
+  });
+  const selectedCount = discovered.filter((tool) => tool.selected && !tool.in_current_scope).length;
+  const availableCount = inventory?.available_count ?? (discovered.length ? discovered.length : null);
+  const scopeDisplayCount = inventory?.current_scope_is_overall
+    ? inventory.imported_count
+    : inventory?.current_scope_count || 0;
+  const scopeCountLabel = inventory?.current_scope_is_overall ? '系统已导入' : '当前员工已添加';
+  const allAddedToCurrentScope = Boolean(
+    inventory
+      && inventory.available_count != null
+      && inventory.available_count > 0
+      && discovered.every((tool) => tool.in_current_scope),
+  );
+
+  function setToolSelected(name: string, selected: boolean) {
+    setDiscovered((prev) =>
+      prev.map((tool) =>
+        tool.name === name && !tool.in_current_scope ? { ...tool, selected } : tool,
       ),
-    },
-    {
-      key: 'name',
-      title: '工具',
-      width: 220,
-      className: 'whitespace-normal',
-      render: (row) => (
-        <span className="block wrap-break-word font-medium text-[#18181a]" title={row.name}>
-          {row.name}
-        </span>
-      ),
-    },
-    {
-      key: 'description',
-      title: '描述',
-      className: 'whitespace-normal',
-      render: (row) => (
-        <span className="block wrap-break-word text-[#858b9c]">{row.description || '暂无描述'}</span>
-      ),
-    },
-    {
-      key: 'imported',
-      title: '状态',
-      width: 96,
-      render: (row) => (
-        <StatusBadge tone={row.imported ? 'green' : 'gray'}>{row.imported ? '已导入' : '未导入'}</StatusBadge>
-      ),
-    },
-  ];
+    );
+  }
+
+  function selectCurrentResults() {
+    const names = new Set(filteredDiscovered.filter((tool) => !tool.in_current_scope).map((tool) => tool.name));
+    setDiscovered((prev) => prev.map((tool) => (names.has(tool.name) ? { ...tool, selected: true } : tool)));
+  }
+
+  function clearToolSelection() {
+    setDiscovered((prev) => prev.map((tool) => ({ ...tool, selected: false })));
+  }
+
+  function syncSelected() {
+    const names = discovered
+      .filter((tool) => tool.selected && !tool.in_current_scope)
+      .map((tool) => tool.name);
+    return syncTools(names);
+  }
 
   return (
     <div className="min-h-full box-border px-[48px] pt-[32px] pb-[43px] max-[900px]:px-[16px]" aria-busy={loading}>
@@ -1698,38 +1961,185 @@ function McpServerEditorPage({ mode, currentUser, onLogout }: { mode: 'new' | 'e
         </SectionCard>
 
         <SectionCard
-          title="工具发现（tools/list）"
-          bodyClassName="flex flex-col gap-[14px]"
+          title="MCP 工具集"
+          bodyClassName="flex flex-col gap-[16px]"
           extra={(
-            <div className="flex items-center gap-[8px]">
-              <UIButton variant="outline" disabled={discovering} onClick={() => void discover()} className={RETURN_BUTTON_CLASS}>
-                <IconRefresh className="size-[14px] shrink-0" />
-                发现工具
-              </UIButton>
-              <UIButton disabled={!server || syncing} onClick={() => void sync()} className={PRIMARY_BUTTON_CLASS}>
-                导入/同步
-              </UIButton>
-            </div>
+            <UIButton
+              variant="outline"
+              disabled={discovering}
+              onClick={() => void discover()}
+              className={RETURN_BUTTON_CLASS}
+            >
+              <IconRefresh className={cn('size-[14px] shrink-0', discovering && 'animate-spin')} />
+              刷新工具
+            </UIButton>
           )}
         >
-          <p className={HINT_CLASS}>
-            {server
-              ? '点击「发现工具」拉取 tools/list，勾选后「导入/同步」即可生成工具行。'
-              : '请先保存 MCP 服务器，才能导入并同步工具。'}
-          </p>
-          {discovered.length ? (
-            <DataTable
-              aria-label="发现的工具"
-              columns={discoveredColumns}
-              data={discovered}
-              rowKey={(row) => row.name}
-              loading={discovering}
-              emptyText="未发现工具"
-            />
-          ) : (
-            <div className="grid min-h-[180px] place-items-center rounded-[12px] border border-dashed border-[#eceef1] p-[20px] text-center text-[13px] text-[#858b9c]">
-              点击「发现工具」后，这里会列出该 MCP Server 提供的工具。
+          <div className="flex flex-col gap-[14px] border-y border-[#eceef1] bg-[#fafbfc] px-[2px] py-[16px] sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0 flex-1 px-[12px]">
+              <strong className="block truncate text-[14px] font-medium text-[#18181a]">
+                {values.display_name || values.name || '未命名 MCP 工具集'}
+              </strong>
+              <p className="mt-[4px] line-clamp-2 wrap-break-word text-[12px] leading-[1.6] text-[#858b9c]">
+                {values.description || '暂无工具集描述'}
+              </p>
+              <div className="mt-[10px] flex flex-wrap gap-[6px]">
+                <StatusBadge tone={availableCount == null ? 'gray' : 'blue'}>
+                  {availableCount == null ? '尚未发现' : `已发现 ${availableCount} 个`}
+                </StatusBadge>
+                <StatusBadge tone={scopeDisplayCount > 0 ? 'green' : 'gray'}>
+                  {scopeCountLabel} {scopeDisplayCount} 个
+                </StatusBadge>
+              </div>
             </div>
+            <div className="flex shrink-0 items-center px-[12px]">
+              <UIButton
+                disabled={!server || syncing || discovering || !availableCount || allAddedToCurrentScope}
+                onClick={() => void syncTools(null)}
+                className={PRIMARY_BUTTON_CLASS}
+              >
+                {allAddedToCurrentScope ? '已全部添加' : '导入全部'}
+              </UIButton>
+            </div>
+          </div>
+
+          {discoveryError && (
+            <div role="alert" className="border-l-2 border-[#e5484d] bg-[#fff7f7] px-[12px] py-[9px] text-[12px] leading-[1.55] text-[#b4232a]">
+              {discoveryError}
+            </div>
+          )}
+
+          {discovering && !discovered.length && (
+            <div className="py-[24px] text-center text-[13px] text-[#858b9c]">正在发现工具…</div>
+          )}
+
+          <Accordion type="single" collapsible>
+            <AccordionItem value="custom-tools" className="border-y border-[#eceef1]">
+              <AccordionTrigger className="px-[12px] hover:no-underline">
+                <span className="flex min-w-0 flex-col gap-[2px]">
+                  <span>自定义选择</span>
+                  <span className="text-[11px] font-normal text-[#858b9c]">
+                    按名称、用途或添加状态筛选工具
+                  </span>
+                </span>
+              </AccordionTrigger>
+              <AccordionContent className="px-[12px] pb-[12px]">
+                <div className="flex flex-col gap-[12px]">
+                  <div className="flex flex-col gap-[10px] lg:flex-row lg:items-center lg:justify-between">
+                    <div className="relative min-w-0 flex-1">
+                      <IconSearch className="pointer-events-none absolute left-[10px] top-1/2 size-[14px] -translate-y-1/2 text-[#858b9c]" />
+                      <Input
+                        aria-label="搜索 MCP 工具"
+                        className="pl-[32px]"
+                        placeholder="搜索工具名称或用途"
+                        value={toolSearch}
+                        onChange={(event) => setToolSearch(event.target.value)}
+                      />
+                    </div>
+                    <Tabs value={toolFilter} onValueChange={(value) => setToolFilter(value as ToolInventoryFilter)}>
+                      <TabsList aria-label="工具添加状态" className="w-full lg:w-auto">
+                        <TabsTrigger value="all">全部 {discovered.length}</TabsTrigger>
+                        <TabsTrigger value="unadded">
+                          未添加 {discovered.filter((tool) => !tool.in_current_scope).length}
+                        </TabsTrigger>
+                        <TabsTrigger value="added">
+                          已添加 {discovered.filter((tool) => tool.in_current_scope).length}
+                        </TabsTrigger>
+                      </TabsList>
+                    </Tabs>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-[8px]">
+                    <span className={HINT_CLASS}>已选择 {selectedCount} 个待添加工具</span>
+                    <div className="flex flex-wrap items-center gap-[8px]">
+                      <UIButton
+                        variant="outline"
+                        size="sm"
+                        disabled={!filteredDiscovered.some((tool) => !tool.in_current_scope)}
+                        onClick={selectCurrentResults}
+                        className={RETURN_BUTTON_CLASS}
+                      >
+                        全选当前结果
+                      </UIButton>
+                      <UIButton
+                        variant="outline"
+                        size="sm"
+                        disabled={!selectedCount}
+                        onClick={clearToolSelection}
+                        className={RETURN_BUTTON_CLASS}
+                      >
+                        清空
+                      </UIButton>
+                      <UIButton
+                        size="sm"
+                        disabled={!server || syncing || !selectedCount}
+                        onClick={() => void syncSelected()}
+                        className={PRIMARY_BUTTON_CLASS}
+                      >
+                        添加所选（{selectedCount}）
+                      </UIButton>
+                    </div>
+                  </div>
+
+                  {filteredDiscovered.length ? (
+                    <div role="list" aria-label="MCP 工具列表" className="border-t border-[#eceef1]">
+                      {filteredDiscovered.map((tool) => {
+                        const parameterNames = schemaPropertyNames(tool.input_schema);
+                        return (
+                          <div
+                            role="listitem"
+                            key={tool.name}
+                            className="grid grid-cols-[24px_minmax(0,1fr)] gap-[10px] border-b border-[#eceef1] py-[12px]"
+                          >
+                            <Checkbox
+                              checked={tool.in_current_scope || tool.selected}
+                              disabled={tool.in_current_scope}
+                              onCheckedChange={(next) => setToolSelected(tool.name, next === true)}
+                              aria-label={tool.in_current_scope ? `${tool.name} 已添加` : `选择 ${tool.name}`}
+                              className="mt-[2px]"
+                            />
+                            <div className="min-w-0">
+                              <div className="flex min-w-0 flex-wrap items-center gap-[8px]">
+                                <strong className="min-w-0 wrap-break-word text-[13px] font-medium text-[#18181a]">
+                                  {tool.name}
+                                </strong>
+                                <StatusBadge tone={tool.in_current_scope ? 'green' : 'gray'}>
+                                  {tool.in_current_scope ? '已添加' : '未添加'}
+                                </StatusBadge>
+                              </div>
+                              <p className="mt-[4px] line-clamp-2 wrap-break-word text-[12px] leading-[1.6] text-[#858b9c]">
+                                {shortToolDescription(tool.description)}
+                              </p>
+                              {(tool.description || parameterNames.length > 0) && (
+                                <details className="mt-[6px] text-[12px] text-[#667085]">
+                                  <summary className="w-fit cursor-pointer text-[#596579] hover:text-[#18181a]">
+                                    查看详情
+                                  </summary>
+                                  <div className="mt-[6px] flex flex-col gap-[5px] border-l-2 border-[#eceef1] pl-[10px] leading-[1.65]">
+                                    <p className="wrap-break-word">{tool.description || '暂无描述'}</p>
+                                    <p className="wrap-break-word">
+                                      输入参数：{parameterNames.length ? parameterNames.join('、') : '无'}
+                                    </p>
+                                  </div>
+                                </details>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="border-y border-dashed border-[#eceef1] py-[28px] text-center text-[13px] text-[#858b9c]">
+                      {discovered.length ? '没有符合条件的工具' : '尚未发现工具'}
+                    </div>
+                  )}
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
+
+          {!server && (
+            <p className={HINT_CLASS}>请先保存 MCP 服务器，才能把发现的工具添加到当前范围。</p>
           )}
         </SectionCard>
       </div>
@@ -2133,6 +2543,33 @@ function buildBucketStats(rows: ToolRead[]) {
   return Array.from(map.values()).sort((a, b) => b.total - a.total || a.bucket.localeCompare(b.bucket));
 }
 
+function matchesSearch(values: Array<string | undefined | null>, searchKey: string): boolean {
+  return values.some((value) => String(value || '').toLowerCase().includes(searchKey));
+}
+
+function toolMatchesSearch(tool: ToolRead, searchKey: string): boolean {
+  return matchesSearch([
+    tool.name,
+    tool.display_name,
+    tool.description,
+    tool.bucket,
+    tool.method,
+    tool.url,
+    resourceCreatorName(tool),
+  ], searchKey);
+}
+
+function serverMatchesSearch(server: MCPServerRead, searchKey: string): boolean {
+  return matchesSearch([
+    server.name,
+    server.display_name,
+    server.description,
+    server.bucket,
+    serverEndpoint(server.connection),
+    transportLabel(server.connection.transport),
+  ], searchKey);
+}
+
 function parseJson<T>(value: string, fallback: T): T {
   if (!value) return fallback;
   return JSON.parse(value) as T;
@@ -2147,6 +2584,20 @@ function schemaPropertyCount(schema: Record<string, unknown>): string {
     ? schema.properties as Record<string, unknown>
     : {};
   return `${Object.keys(properties).length}`;
+}
+
+function schemaPropertyNames(schema: Record<string, unknown>): string[] {
+  const properties = schema.properties && typeof schema.properties === 'object'
+    ? schema.properties as Record<string, unknown>
+    : {};
+  return Object.keys(properties);
+}
+
+function shortToolDescription(description: string): string {
+  const normalized = String(description || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '暂无描述';
+  const sentence = normalized.split(/(?<=[。！？.!?])/u, 1)[0] || normalized;
+  return sentence.length > 96 ? `${sentence.slice(0, 96)}…` : sentence;
 }
 
 function toolTypeLabel(tool: ToolRead): string {
