@@ -1388,15 +1388,20 @@ def test_skill_distiller_stream_reflects_and_repairs_generated_skill(monkeypatch
                             "origin": "generated_skill",
                         }
                     ],
-                    "warnings": [],
-                    "source_warnings": [],
+                    "warnings": ["旧草稿缺少闭环节点。"],
+                    "source_warnings": ["订单结果格式未定义。"],
                     "draft_skill": revised,
                     "tool_mentions": [],
                 },
                 ensure_ascii=False,
             )
         if payload.get("reflection_round") == 2:
-            return _reflection_passes_json()
+            assert payload["candidate_skill"]["nodes"][-1]["node_id"] == "reply_result"
+            assert len(payload["reflection_history"]) == 1
+            passed_review = json.loads(_reflection_passes_json())
+            passed_review["source_warnings"] = ["订单结果格式未定义。"]
+            passed_review["warnings"] = ["订单结果格式未定义，来源未约定。"]
+            return json.dumps(passed_review, ensure_ascii=False)
         raise AssertionError(f"unexpected payload: {payload}")
 
     monkeypatch.setattr("app.skills.skill_distiller.LLMClient.generate_text_stream", fake_stream)
@@ -1418,8 +1423,222 @@ def test_skill_distiller_stream_reflects_and_repairs_generated_skill(monkeypatch
     assert any("校验发现：闭环能力" in text for text in status_texts)
     assert any("校验未通过，正在应用第 1 轮修正" in text for text in status_texts)
     assert any("校验通过" in text for text in status_texts)
-    assert any(event["event"] == "chunk_reset" for event in events)
+    assert not any(event["event"] == "chunk_reset" for event in events)
     assert [step["node_id"] for step in complete["data"]["draft_skill"]["nodes"]][-1] == "reply_result"
+    assert "旧草稿缺少闭环节点。" not in complete["data"]["warnings"]
+    assert any("订单结果格式未定义" in warning for warning in complete["data"]["warnings"])
+    assert len([warning for warning in complete["data"]["warnings"] if "订单结果格式未定义" in warning]) == 1
+
+
+def test_skill_distiller_normalizes_tool_free_terminal_and_policy_without_injected_capabilities() -> None:
+    response = SkillDistiller()._normalize_response(  # noqa: SLF001
+        {
+            "draft_skill": {
+                "skill_id": "demo_visitor_wifi_live_v1",
+                "name": "客户演示·访客 Wi-Fi 申请登记",
+                "version": "1.0.0",
+                "business_domain": "it",
+                "description": "仅在对话内登记访客 Wi-Fi 信息。",
+                "trigger_intents": ["visitor_wifi_request"],
+                "user_utterance_examples": ["登记访客 Wi-Fi"],
+                "goal": ["完成对话内登记"],
+                "required_info": [],
+                "slot_filling_policy": {"enabled": True},
+                "response_rules": ["不得创建、建议或调用任何工具。"],
+                "nodes": [
+                    {
+                        "node_id": "wifi_request_complete",
+                        "type": "terminal",
+                        "name": "完成登记",
+                        "instruction": "确认登记完成，但不声称已经提交或开通。",
+                        "expected_user_info": [],
+                        "allowed_actions": ["answer_user"],
+                    }
+                ],
+                "edges": [],
+                "start_node_id": "wifi_request_complete",
+                "terminal_node_ids": ["wifi_request_complete"],
+                "interruption_policy": {
+                    "allow_topic_interruption": True,
+                    "handoff_conditions": ["用户要求实际开通 Wi-Fi"],
+                },
+            }
+        },
+        SkillDistillRequest(
+            tenant_id="tenant_demo",
+            title="访客 Wi-Fi 登记",
+            raw_content="全程禁止工具，只完成对话内登记。",
+        ),
+    )
+
+    draft = response.draft_skill
+    combined_text = "\n".join(
+        [*draft.response_rules, *[node.instruction for node in draft.nodes]]
+    )
+    assert draft.nodes[0].type == "response"
+    assert draft.terminal_node_ids == ["wifi_request_complete"]
+    assert "调用已配置工具" not in combined_text
+    assert "工具调用" not in combined_text
+    assert "调用工具" not in combined_text
+    assert "转人工" not in combined_text
+    assert "handoff_human" not in draft.nodes[0].allowed_actions
+    assert draft.interruption_policy == {
+        "allow_topic_interruption": "true",
+        "handoff_conditions": '["用户要求实际开通 Wi-Fi"]',
+    }
+
+
+def test_skill_distiller_reflection_deduplicates_generated_and_reviewed_source_warnings(
+    monkeypatch,
+) -> None:
+    def fake_stream(self, _system_prompt: str, _payload: dict):  # noqa: ANN001
+        assert self.max_output_tokens == 8192
+        yield json.dumps(
+            {
+                "draft_skill": _skill_card().model_dump(mode="json"),
+                "warnings": ["原始流程未说明订单结果格式，因此只能保守回复。"],
+            },
+            ensure_ascii=False,
+        )
+
+    def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+        assert payload["reflection_round"] == 1
+        review = json.loads(_reflection_passes_json())
+        review["source_warnings"] = ["原始流程未说明订单结果格式，因此候选技能只能保守回复。"]
+        return json.dumps(review, ensure_ascii=False)
+
+    monkeypatch.setattr("app.skills.skill_distiller.LLMClient.generate_text_stream", fake_stream)
+    monkeypatch.setattr("app.skills.skill_distiller.LLMClient.generate_text", fake_text)
+
+    events = list(
+        SkillDistiller().stream_text(
+            SkillDistillRequest(
+                tenant_id="tenant_demo",
+                title="购买流程",
+                raw_content="收集购买信息并回复结果。",
+            ),
+            _model_config(),
+        )
+    )
+    complete = next(event for event in events if event["event"] == "complete")
+    warnings = complete["data"]["warnings"]
+
+    assert len([warning for warning in warnings if "订单结果格式" in warning]) == 1
+    assert warnings[0].startswith("原始文档本身可能存在问题：")
+
+
+def test_skill_distiller_reflection_stops_when_revision_does_not_change_candidate(monkeypatch) -> None:
+    review_rounds: list[int] = []
+
+    def fake_stream(self, _system_prompt: str, _payload: dict):  # noqa: ANN001
+        assert self.max_output_tokens == 8192
+        yield json.dumps(
+            {"draft_skill": _skill_card().model_dump(mode="json"), "warnings": []},
+            ensure_ascii=False,
+        )
+
+    def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+        assert self.max_output_tokens == 8192
+        round_index = int(payload["reflection_round"])
+        review_rounds.append(round_index)
+        return json.dumps(
+            {
+                "passed": False,
+                "summary": "模型提出了修正，但草稿没有实际变化。",
+                "rubric_results": [
+                    {
+                        "name": "source_alignment",
+                        "passed": False,
+                        "finding": "草稿仍需调整。",
+                        "origin": "generated_skill",
+                    }
+                ],
+                "source_warnings": [],
+                "warnings": [],
+                "draft_skill": payload["candidate_skill"],
+                "tool_mentions": [],
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr("app.skills.skill_distiller.LLMClient.generate_text_stream", fake_stream)
+    monkeypatch.setattr("app.skills.skill_distiller.LLMClient.generate_text", fake_text)
+
+    events = list(
+        SkillDistiller().stream_text(
+            SkillDistillRequest(
+                tenant_id="tenant_demo",
+                title="购买流程",
+                raw_content="收集购买信息并回复结果。",
+            ),
+            _model_config(),
+        )
+    )
+    complete = next(event for event in events if event["event"] == "complete")
+    status_texts = [event["data"]["text"] for event in events if event["event"] == "status"]
+
+    assert review_rounds == [1]
+    assert "修正未产生实际变化，提前结束校验" in status_texts
+    assert any("已提前结束重复校验" in warning for warning in complete["data"]["warnings"])
+
+
+def test_skill_distiller_reflection_keeps_unreviewed_third_revision_without_stale_findings(monkeypatch) -> None:
+    review_rounds: list[int] = []
+
+    def fake_stream(self, _system_prompt: str, _payload: dict):  # noqa: ANN001
+        assert self.max_output_tokens == 8192
+        yield json.dumps(
+            {"draft_skill": _skill_card().model_dump(mode="json"), "warnings": []},
+            ensure_ascii=False,
+        )
+
+    def fake_text(self, _system_prompt: str, payload: dict):  # noqa: ANN001
+        assert self.max_output_tokens == 8192
+        round_index = int(payload["reflection_round"])
+        review_rounds.append(round_index)
+        revised = dict(payload["candidate_skill"])
+        revised["description"] = f"第 {round_index} 轮修正版"
+        return json.dumps(
+            {
+                "passed": False,
+                "summary": f"第 {round_index} 轮仍需修正。",
+                "rubric_results": [
+                    {
+                        "name": "source_alignment",
+                        "passed": False,
+                        "finding": f"第 {round_index} 轮旧草稿问题",
+                        "origin": "generated_skill",
+                    }
+                ],
+                "source_warnings": [],
+                "warnings": [f"第 {round_index} 轮旧告警"],
+                "draft_skill": revised,
+                "tool_mentions": [],
+            },
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr("app.skills.skill_distiller.LLMClient.generate_text_stream", fake_stream)
+    monkeypatch.setattr("app.skills.skill_distiller.LLMClient.generate_text", fake_text)
+
+    events = list(
+        SkillDistiller().stream_text(
+            SkillDistillRequest(
+                tenant_id="tenant_demo",
+                title="购买流程",
+                raw_content="收集购买信息并回复结果。",
+            ),
+            _model_config(),
+        )
+    )
+    complete = next(event for event in events if event["event"] == "complete")
+    status_texts = [event["data"]["text"] for event in events if event["event"] == "status"]
+
+    assert review_rounds == [1, 2, 3]
+    assert complete["data"]["draft_skill"]["description"] == "第 3 轮修正版"
+    assert "校验达到上限，保留最后一版未复核修正版" in status_texts
+    assert any("最后一版修正尚未再次模型复核" in warning for warning in complete["data"]["warnings"])
+    assert not any("旧告警" in warning or "旧草稿问题" in warning for warning in complete["data"]["warnings"])
 
 
 def test_skill_distiller_reflection_checks_tool_call_format_without_rule_fallback(monkeypatch) -> None:
@@ -1531,6 +1750,10 @@ def test_skill_reflection_prompt_keeps_new_candidate_tool_actions() -> None:
     assert "保留该 action" in prompt
     assert "不得仅因不在 available_tools" in prompt
     assert "tool_suggestions(existing/new_candidate)" in prompt
+    assert "type=response" in prompt
+    assert "terminal_node_ids" in prompt
+    assert "interruption_policy 是字符串值映射" in prompt
+    assert "明确禁止工具或人工转接" in prompt
 
 
 def test_skill_distiller_stream_repairs_invalid_json_with_model(monkeypatch) -> None:

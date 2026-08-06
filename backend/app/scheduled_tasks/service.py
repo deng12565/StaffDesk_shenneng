@@ -120,6 +120,9 @@ def scheduled_task_read(row: ScheduledTask) -> ScheduledTaskRead:
         last_status=row.last_status,
         run_count=row.run_count,
         source_session_id=row.source_session_id,
+        execution_kind=row.execution_kind,
+        execution_config=row.execution_config_json or {},
+        delivery_config=row.delivery_config_json or {},
         metadata=row.metadata_json or {},
         created_at=row.created_at.isoformat(),
         updated_at=row.updated_at.isoformat(),
@@ -330,7 +333,9 @@ def execute_scheduled_task(
 ) -> ScheduledTaskRun:
     scheduled_for = scheduled_for or task.next_run_at or utc_now()
     run = _prepare_scheduled_task_run(db, task, scheduled_for, manual)
-    if run.status != "running" or not run.session_id:
+    if run.status != "running" or (
+        task.execution_kind == "agent_turn" and not run.session_id
+    ):
         return run
     return _execute_prepared_scheduled_task(db, task, run, manual=manual)
 
@@ -344,7 +349,9 @@ def start_scheduled_task_async(
 ) -> ScheduledTaskRun:
     scheduled_for = scheduled_for or task.next_run_at or utc_now()
     run = _prepare_scheduled_task_run(db, task, scheduled_for, manual)
-    if run.status == "running" and run.session_id:
+    if run.status == "running" and (
+        task.execution_kind == "recruiting_digest" or run.session_id
+    ):
         threading.Thread(
             target=_execute_prepared_scheduled_task_in_background,
             args=(task.id, run.id, manual),
@@ -399,6 +406,8 @@ def _prepare_scheduled_task_run(
             return existing
         raise
     db.refresh(run)
+    if task.execution_kind == "recruiting_digest":
+        return run
     session = ChatSession(
         id=new_id("session"),
         tenant_id=task.tenant_id,
@@ -435,6 +444,19 @@ def _execute_prepared_scheduled_task(
     manual: bool,
 ) -> ScheduledTaskRun:
     try:
+        if task.execution_kind == "recruiting_digest":
+            from app.recruiting.service import execute_recruiting_digest
+
+            summary = execute_recruiting_digest(db, task, run, manual=manual)
+            run.status = "succeeded"
+            run.result_summary = summary[:500]
+            run.trace_json = {
+                "execution_kind": "recruiting_digest",
+                "digest_config_id": (task.execution_config_json or {}).get("digest_config_id"),
+            }
+            run.finished_at = utc_now()
+            _finish_task_schedule(db, task, run.scheduled_for, "succeeded", manual)
+            return run
         if not run.session_id:
             raise RuntimeError("自动任务缺少独立会话")
         request = ChatTurnRequest(
@@ -465,6 +487,10 @@ def _execute_prepared_scheduled_task(
         run.finished_at = utc_now()
         _finish_task_schedule(db, task, run.scheduled_for, "succeeded", manual)
     except Exception as exc:
+        if task.execution_kind == "recruiting_digest":
+            from app.recruiting.service import stage_recruiting_failure_digest
+
+            stage_recruiting_failure_digest(db, task, run, str(exc))
         run.status = "failed"
         run.error = str(exc)
         run.finished_at = utc_now()

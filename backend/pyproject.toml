@@ -18,6 +18,8 @@ dependencies = [
   "pydantic>=2.7.0",
   "pydantic-settings>=2.3.0",
   "pypdf>=4.2.0",
+  "PyMuPDF>=1.24.0",
+  "Pillow>=10.3.0",
   "python-multipart>=0.0.9",
   "python-docx>=1.1.2",
   "python-dotenv>=1.0.1",
@@ -26,7 +28,8 @@ dependencies = [
   "tzdata>=2025.2",
   "uvicorn[standard]>=0.30.0",
   "wecom-aibot-python-sdk>=1.0.2",
-  "dingtalk-stream>=0.24.3,<0.25.0"
+  "dingtalk-stream>=0.24.3,<0.25.0",
+  "pywin32>=306; platform_system == 'Windows'"
 ]
 
 [project.optional-dependencies]

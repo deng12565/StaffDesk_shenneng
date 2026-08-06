@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     # 钉钉 emotion 接口的表情常量与所需权限尚未真机验证，验证通过前默认关闭：
     # 否则常量失效或权限未开时，每条入站消息都会留下一条失败的 reaction 投递。
     channel_dingtalk_reaction_enabled: bool = False
+    recruiting_data_dir: str = ""
+    recruiting_7z_path: str = r"E:\7-Zip\7z.exe"
+    recruiting_max_email_bytes: int = 25 * 1024 * 1024
+    recruiting_max_attachment_bytes: int = 20 * 1024 * 1024
+    recruiting_model_concurrency: int = 3
 
     model_config = SettingsConfigDict(
         env_file=_os.environ.get("ULTRARAG_DOTENV", ".env"),

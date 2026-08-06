@@ -39,6 +39,7 @@ hiddenimports = (
         "single_port_app",
         "feishu_connector_worker",
         "cryptography", "certifi", "python_multipart", "docx", "pypdf", "bs4", "openai",
+        "fitz", "PIL", "PIL.Image",
         "anthropic",
         # 动态导入补充：pydantic/starlette/anyio 等
         "pydantic", "pydantic_settings", "pydantic.deprecated.decorator",
@@ -53,6 +54,9 @@ if sys.platform == "darwin":
     hiddenimports = hiddenimports + collect_submodules("objc") + [
         "AppKit", "Foundation", "PyObjCTools", "PyObjCTools.AppHelper",
     ]
+
+if sys.platform == "win32":
+    hiddenimports = hiddenimports + collect_submodules("win32com") + ["pythoncom", "pywintypes"]
 
 a = Analysis(
     [str(BACKEND / "desktop_launcher.py")],

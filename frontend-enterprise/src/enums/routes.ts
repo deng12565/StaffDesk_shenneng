@@ -6,6 +6,7 @@ export enum EnterpriseRoute {
   Agents = '/enterprise/agents',
   Dashboard = '/enterprise/dashboard',
   ScheduledTasks = '/enterprise/scheduled-tasks',
+  Recruiting = '/enterprise/recruiting',
   Memories = '/enterprise/memories',
   Feedback = '/enterprise/feedback',
   Channels = '/enterprise/channels',

@@ -22,6 +22,7 @@ from app.db.models import (
     ChannelInboundEvent,
     ChatSession,
     Message,
+    RecruitingDigestBatch,
     new_id,
     utc_now,
 )
@@ -519,6 +520,7 @@ def _deliver_one_locked(db: Session, delivery: ChannelDelivery) -> None:
         if not retryable or delivery.attempts >= settings.channel_delivery_max_attempts:
             delivery.status = "failed"
             delivery.next_attempt_at = None
+            _sync_recruiting_delivery(db, delivery, "delivery_failed")
         else:
             delay = min(2**delivery.attempts, 300)
             delivery.status = "pending"
@@ -534,6 +536,7 @@ def _deliver_one_locked(db: Session, delivery: ChannelDelivery) -> None:
     delivery.sending_since = None
     delivery.updated_at = utc_now()
     db.add(delivery)
+    _sync_recruiting_delivery(db, delivery, "delivered")
     if channel_reaction_token(binding.channel) and delivery.kind not in _REACTION_KINDS:
         event = _reaction_event_for_delivery(db, delivery, binding.channel)
         target = delivery.target_json or {}
@@ -543,6 +546,24 @@ def _deliver_one_locked(db: Session, delivery: ChannelDelivery) -> None:
         if event and is_final:
             _stage_reaction_removal(db, delivery, event)
     db.commit()
+
+
+def _sync_recruiting_delivery(
+    db: Session,
+    delivery: ChannelDelivery,
+    status: str,
+) -> None:
+    if delivery.kind != "scheduled_digest":
+        return
+    batch = db.exec(
+        select(RecruitingDigestBatch).where(RecruitingDigestBatch.delivery_id == delivery.id)
+    ).first()
+    if not batch:
+        return
+    batch.status = status
+    batch.delivered_at = utc_now() if status == "delivered" else None
+    batch.updated_at = utc_now()
+    db.add(batch)
 
 
 def cleanup_channel_reactions_before_binding_delete(

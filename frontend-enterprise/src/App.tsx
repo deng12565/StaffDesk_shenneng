@@ -51,6 +51,7 @@ import GeneralSkillsPage, {
 import KnowledgeManagePage, { KnowledgeAddPage } from "./pages/KnowledgePage";
 import LoginPage from "./pages/LoginPage";
 import ModelsPage from "./pages/ModelsPage";
+import RecruitingPage from "./pages/RecruitingPage";
 import OpenPlatformPage from "./pages/OpenPlatformPage";
 import SkillsPage from "./pages/SkillsPage";
 import {
@@ -161,6 +162,8 @@ function Shell({
               ? "/enterprise/tools"
               : location.pathname.startsWith("/enterprise/scheduled-tasks")
                 ? "/enterprise/scheduled-tasks"
+                : location.pathname.startsWith("/enterprise/recruiting") || location.pathname.startsWith("/recruiting/digests")
+                  ? "/enterprise/recruiting"
                 : isDistillRoute
                   ? "/enterprise/skills"
                   : location.pathname;
@@ -648,6 +651,26 @@ function Shell({
                     currentUser={auth.user}
                     onLogout={onLogout}
                   />
+                }
+              />
+              <Route
+                path="/enterprise/recruiting"
+                element={
+                  isAdmin ? (
+                    <RecruitingPage currentUser={auth.user} onLogout={onLogout} />
+                  ) : (
+                    <Navigate to={EnterpriseRoute.Gallery} replace />
+                  )
+                }
+              />
+              <Route
+                path="/recruiting/digests/:batchId"
+                element={
+                  isAdmin ? (
+                    <RecruitingPage currentUser={auth.user} onLogout={onLogout} />
+                  ) : (
+                    <Navigate to={EnterpriseRoute.Gallery} replace />
+                  )
                 }
               />
               <Route

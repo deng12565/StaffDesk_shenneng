@@ -185,6 +185,8 @@ def brand_icon(request: Request) -> FileResponse:
 
 @app.get("/enterprise", include_in_schema=False)
 @app.get("/enterprise/{path:path}", include_in_schema=False)
+@app.get("/recruiting", include_in_schema=False)
+@app.get("/recruiting/{path:path}", include_in_schema=False)
 def enterprise_app(path: str = "") -> FileResponse:
     return spa_index_response(ENTERPRISE_DIST / "index.html")
 

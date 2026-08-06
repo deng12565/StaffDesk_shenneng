@@ -1,0 +1,1 @@
+"""Recruiting digest domain services."""

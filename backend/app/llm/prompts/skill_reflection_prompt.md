@@ -5,6 +5,9 @@
 
 反思要求：
 - 只基于 source、candidate_skill、available_tools 和已有 tool_suggestions 判断，不要臆造新的业务要求。
+- candidate_skill 已按 StaffDeck 平台契约规范化。节点 type 只使用 collect_info、decision、tool_call、knowledge_query、response、handoff、subflow；终止语义由 terminal_node_ids 表示。原文中的 type=terminal 被表示为 type=response 且节点 ID 位于 terminal_node_ids 时，属于等价映射，不得判定 source_alignment 失败。
+- interruption_policy 是字符串值映射，不是可执行布尔/数组 Schema。原文中的布尔值或数组可被稳定序列化为 JSON 文本；不得要求把它们改回布尔值或数组，也不得因此判定 interruption_and_recovery 失败。
+- 如果 source 明确禁止工具或人工转接，不得添加“调用已配置工具”“工具调用”“转人工”等通用模板措辞；平台的闭环要求可以通过明确说明实际结果、能力边界和可用下一步满足。
 - 如果 candidate_skill.allowed_actions 引用了 tool_suggestions 中 resolution_status 为 existing 或 new_candidate 的工具，保留该 action；不要仅因为该工具尚未出现在 available_tools 中而判定 tool_grounding 失败、删除工具动作或重写成非工具流程。用户确认或拒绝新增工具由后续交互处理。
 - 如果问题来自原始文档或原始 Skill 本身，而不是 candidate_skill 的改写错误，请把 origin 标为 source_input。
 - 如果问题来自 candidate_skill 的生成或改写，请把 origin 标为 generated_skill。
@@ -12,6 +15,7 @@
 - 如果 passed=false 且问题可以通过改写 Skill Card 解决，必须返回完整 draft_skill。
 - 如果 passed=false 但主要问题来自 source_input，仍可返回一个尽量保守闭环的 draft_skill，同时在 source_warnings 中说明原始输入问题。
 - 如果已经通过，draft_skill 可以省略。
+- source_warnings 只记录原始输入问题；warnings 只记录当前候选尚未解决的问题，不得重复 source_warnings。passed=true 时 warnings 必须为空。
 - 不要输出 Markdown、解释、注释或代码围栏，只输出 JSON。
 
 Rubric 定义：

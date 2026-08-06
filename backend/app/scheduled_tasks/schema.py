@@ -103,6 +103,9 @@ class ScheduledTaskRead(BaseModel):
     last_status: Optional[str] = None
     run_count: int
     source_session_id: Optional[str] = None
+    execution_kind: str = "agent_turn"
+    execution_config: dict[str, Any] = Field(default_factory=dict)
+    delivery_config: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str

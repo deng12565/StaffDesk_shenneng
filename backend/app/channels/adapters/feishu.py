@@ -20,6 +20,7 @@ from app.db.models import ChannelBinding
 FEISHU_API_BASE = "https://open.feishu.cn/open-apis"
 TOKEN_REFRESH_SKEW_SECONDS = 300
 FEISHU_REACTION_TOKEN = "Get"
+FEISHU_SCHEDULED_DIGEST_BUDGET_BYTES = 120 * 1024
 _TOKEN_INVALID_CODES = {99991663, 99991664, 99991668}
 _PERMANENT_MESSAGE_CODES = {
     230001,  # invalid request/target
@@ -343,7 +344,20 @@ class FeishuAdapter:
         receive_id_type = str(target.get("receive_id_type") or "").strip()
         if not message_id and (not receive_id or not receive_id_type):
             raise FeishuPermanentError("飞书投递目标无效")
-        for index, chunk in enumerate(split_channel_text(text)):
+        single_text = target.get("delivery_mode") == "single_text"
+        if single_text:
+            if message_id or receive_id_type != "open_id":
+                raise FeishuPermanentError("招聘日报只允许指定用户 open_id 单聊")
+            serialized = json.dumps(
+                {"msg_type": "text", "content": json.dumps({"text": text}, ensure_ascii=False)},
+                ensure_ascii=False,
+            ).encode("utf-8")
+            if len(serialized) > FEISHU_SCHEDULED_DIGEST_BUDGET_BYTES:
+                raise FeishuPermanentError("招聘日报超过 120 KiB 安全预算")
+            chunks = [text]
+        else:
+            chunks = split_channel_text(text)
+        for index, chunk in enumerate(chunks):
             body: dict[str, Any] = {
                 "msg_type": "text",
                 "content": json.dumps({"text": chunk}, ensure_ascii=False),

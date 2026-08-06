@@ -778,6 +778,9 @@ class ScheduledTask(SQLModel, table=True):
     lease_owner: Optional[str] = Field(default=None, index=True)
     lease_until: Optional[datetime] = Field(default=None, index=True)
     source_session_id: Optional[str] = Field(default=None, index=True)
+    execution_kind: str = Field(default="agent_turn", index=True)
+    execution_config_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    delivery_config_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     metadata_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
@@ -804,6 +807,241 @@ class ScheduledTaskRun(SQLModel, table=True):
     trace_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class EmailInboxBinding(SQLModel, table=True):
+    __tablename__ = "email_inbox_bindings"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "email_address", "mailbox_name", name="uq_email_inbox"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("inbox"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    email_address: str = Field(index=True)
+    imap_host: str
+    imap_port: int = 993
+    mailbox_name: str = "INBOX"
+    credentials_enc: Optional[str] = None
+    status: str = Field(default="pending", index=True)
+    last_tested_at: Optional[datetime] = None
+    last_error_code: Optional[str] = Field(default=None, index=True)
+    created_by_user_id: str = Field(index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class MailboxCheckpoint(SQLModel, table=True):
+    __tablename__ = "mailbox_checkpoints"
+    __table_args__ = (
+        UniqueConstraint("binding_id", "mailbox_name", name="uq_mailbox_checkpoint"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("mailcp"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    binding_id: str = Field(index=True)
+    mailbox_name: str = "INBOX"
+    uid_validity: Optional[str] = None
+    highest_processed_uid: int = 0
+    baseline_at: Optional[datetime] = None
+    last_success_at: Optional[datetime] = None
+    checkpoint_version: int = 1
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class RecruitingDigestConfig(SQLModel, table=True):
+    __tablename__ = "recruiting_digest_configs"
+
+    id: str = Field(default_factory=lambda: new_id("recruitcfg"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    agent_id: str = Field(index=True)
+    inbox_binding_id: str = Field(index=True)
+    model_config_id: str = Field(index=True)
+    feishu_binding_id: str = Field(index=True)
+    recipient_open_id: str
+    recipient_allowlist_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    timezone: str = "Asia/Shanghai"
+    snapshot_time: str = "07:00"
+    earliest_delivery_time: str = "08:00"
+    misfire_deadline_time: str = "10:00"
+    raw_retention_days: int = 7
+    result_retention_days: int = 90
+    model_privacy_verified: bool = False
+    model_privacy_fingerprint: Optional[str] = None
+    status: str = Field(default="disabled", index=True)
+    scheduled_task_id: Optional[str] = Field(default=None, index=True)
+    created_by_user_id: str = Field(index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class RecruitingDigestBatch(SQLModel, table=True):
+    __tablename__ = "recruiting_digest_batches"
+    __table_args__ = (
+        UniqueConstraint("scheduled_task_run_id", name="uq_recruiting_batch_run"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("recruitbatch"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    digest_config_id: str = Field(index=True)
+    scheduled_task_run_id: str = Field(index=True)
+    window_started_at: Optional[datetime] = None
+    snapshot_at: datetime = Field(default_factory=utc_now)
+    snapshot_uid_start: int = 0
+    snapshot_uid_end: int = 0
+    status: str = Field(default="queued", index=True)
+    new_email_count: int = 0
+    scored_count: int = 0
+    review_count: int = 0
+    failed_count: int = 0
+    full_report_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    message_text: Optional[str] = None
+    completed_at: Optional[datetime] = None
+    scheduled_delivery_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    delivery_id: Optional[str] = Field(default=None, index=True)
+    error_code: Optional[str] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class RecruitingApplication(SQLModel, table=True):
+    __tablename__ = "recruiting_applications"
+    __table_args__ = (
+        UniqueConstraint("inbox_binding_id", "uid_validity", "mail_uid", name="uq_recruiting_mail_uid"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("candidate"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    batch_id: str = Field(index=True)
+    inbox_binding_id: str = Field(index=True)
+    uid_validity: str
+    mail_uid: int = Field(index=True)
+    message_id_normalized: Optional[str] = Field(default=None, index=True)
+    sender_display: Optional[str] = None
+    received_at: datetime = Field(default_factory=utc_now, index=True)
+    message_sha256: str = Field(index=True)
+    attachment_sha256_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    candidate_display_name: Optional[str] = None
+    status: str = Field(default="detected", index=True)
+    encrypted_source_ref: Optional[str] = None
+    extracted_text: Optional[str] = None
+    evidence_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    job_title_candidates_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    applied_job_title_raw: Optional[str] = None
+    applied_job_title_source: Optional[str] = None
+    normalized_function_name: Optional[str] = None
+    specialization: Optional[str] = None
+    explicit_level: Optional[str] = None
+    standard_role_key: Optional[str] = Field(default=None, index=True)
+    normalization_method: Optional[str] = None
+    normalization_confidence: Optional[float] = None
+    normalization_version: Optional[str] = None
+    job_resolution_status: Optional[str] = Field(default=None, index=True)
+    full_time_experience_months: Optional[int] = None
+    warnings_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    error_code: Optional[str] = Field(default=None, index=True)
+    raw_expires_at: Optional[datetime] = Field(default=None, index=True)
+    result_expires_at: Optional[datetime] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class RecruitingAttachmentArtifact(SQLModel, table=True):
+    __tablename__ = "recruiting_attachment_artifacts"
+
+    id: str = Field(default_factory=lambda: new_id("recruitfile"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    application_id: str = Field(index=True)
+    parent_artifact_id: Optional[str] = Field(default=None, index=True)
+    original_filename: Optional[str] = None
+    archive_entry_name: Optional[str] = None
+    detected_format: str = Field(index=True)
+    nesting_depth: int = 0
+    source_sha256: str = Field(index=True)
+    derived_sha256: Optional[str] = None
+    processing_type: str = Field(default="original", index=True)
+    processor_name: Optional[str] = None
+    processor_version: Optional[str] = None
+    processing_duration_ms: Optional[int] = None
+    status: str = Field(default="pending", index=True)
+    error_code: Optional[str] = Field(default=None, index=True)
+    encrypted_file_ref: Optional[str] = None
+    expires_at: Optional[datetime] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class RecruitingRoleProfile(SQLModel, table=True):
+    __tablename__ = "recruiting_role_profiles"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "standard_role_key", "schema_version", "version", name="uq_role_profile_version"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("roleprofile"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    standard_role_key: str = Field(index=True)
+    normalized_function_name: str
+    specialization: str = ""
+    explicit_level: str = "unspecified"
+    display_name: str
+    responsibilities_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    core_capabilities_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    evidence_guidance_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    warnings_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    version: int = 1
+    is_current: bool = Field(default=True, index=True)
+    model_version: str
+    prompt_version: str
+    schema_version: str = "1"
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class RecruitingRoleAlias(SQLModel, table=True):
+    __tablename__ = "recruiting_role_aliases"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "normalized_alias", "explicit_level", name="uq_recruiting_role_alias"),
+    )
+
+    id: str = Field(default_factory=lambda: new_id("rolealias"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    role_profile_id: str = Field(index=True)
+    raw_title: str
+    normalized_alias: str = Field(index=True)
+    source: str
+    explicit_level: str = "unspecified"
+    confidence: float
+    confirmation_method: str
+    normalization_version: str
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class RecruitingEvaluation(SQLModel, table=True):
+    __tablename__ = "recruiting_evaluations"
+    __table_args__ = (UniqueConstraint("application_id", name="uq_recruiting_evaluation_application"),)
+
+    id: str = Field(default_factory=lambda: new_id("recruiteval"), primary_key=True)
+    tenant_id: str = Field(index=True)
+    application_id: str = Field(index=True)
+    role_profile_id: str = Field(index=True)
+    role_profile_version: int
+    evaluation_stage: str = Field(index=True)
+    weights_json: dict[str, float] = Field(default_factory=dict, sa_column=Column(JSON))
+    dimension_scores_json: dict[str, float] = Field(default_factory=dict, sa_column=Column(JSON))
+    match_evidence_json: dict[str, list[str]] = Field(default_factory=dict, sa_column=Column(JSON))
+    core_capability_assessments_json: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    critical_gaps_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    major_experience_subtotal: float
+    recommendation_index: float = Field(index=True)
+    batch_rank: Optional[int] = Field(default=None, index=True)
+    summary: Optional[str] = None
+    recommendation_reasons_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    risks_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    missing_information_json: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    model_version: str
+    model_protocol: str
+    prompt_version: str
+    completed_at: datetime = Field(default_factory=utc_now)
 
 
 class Message(SQLModel, table=True):

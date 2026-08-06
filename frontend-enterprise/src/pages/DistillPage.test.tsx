@@ -1,14 +1,39 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 
+import { I18nProvider } from '../i18n';
 import type { SkillActionCatalogRead, ToolRead } from '../types';
-import { ActionCombobox, buildActionOptions } from './DistillPage';
+import DistillPage, { ActionCombobox, buildActionOptions } from './DistillPage';
+
+const apiGetMock = vi.hoisted(() => vi.fn());
+const streamPostMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../api/client', () => ({
+  api: {
+    get: apiGetMock,
+    post: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn(),
+    postWithSignal: vi.fn(),
+  },
+  ApiError: class ApiError extends Error {
+    status = 500;
+  },
+  streamGet: vi.fn(),
+  streamPost: streamPostMock,
+  TENANT_ID: 'tenant_demo',
+}));
 
 vi.mock('@/components/AppHeader', () => ({
   default: () => null,
+}));
+
+vi.mock('@/components/ModelConfigDropdown', () => ({
+  ModelConfigDropdown: () => null,
 }));
 
 function mcpLeaf(index: number): ToolRead {
@@ -109,3 +134,109 @@ describe('SOP action picker', () => {
     expect(onSelect).toHaveBeenCalledWith('call_mcp:server_finance');
   });
 });
+
+describe('SOP draft streaming', () => {
+  it('keeps the current preview during chunk reset and replaces it on completion', async () => {
+    window.localStorage.clear();
+    apiGetMock.mockImplementation((url: string) => {
+      if (url.includes('/action-catalog')) {
+        return Promise.resolve({ controls: [], mcp_toolsets: [], http_tools: [] });
+      }
+      return Promise.resolve([]);
+    });
+
+    let continueToReset: (() => void) | undefined;
+    let continueToComplete: (() => void) | undefined;
+    const waitBeforeReset = new Promise<void>((resolve) => {
+      continueToReset = resolve;
+    });
+    const waitBeforeComplete = new Promise<void>((resolve) => {
+      continueToComplete = resolve;
+    });
+    const initialDraft = streamingSkill('Initial Wi-Fi');
+    const finalDraft = streamingSkill('Final Wi-Fi');
+
+    streamPostMock.mockImplementation(
+      async (
+        _url: string,
+        _payload: Record<string, unknown>,
+        onEvent: (item: { event: string; data: Record<string, unknown> }) => void,
+      ) => {
+        onEvent({
+          event: 'chunk',
+          data: { content: JSON.stringify({ draft_skill: initialDraft, warnings: [] }) },
+        });
+        await waitBeforeReset;
+        onEvent({ event: 'chunk_reset', data: {} });
+        await waitBeforeComplete;
+        onEvent({
+          event: 'complete',
+          data: { draft_skill: finalDraft, warnings: [], tool_suggestions: [] },
+        });
+      },
+    );
+
+    render(
+      <I18nProvider>
+        <MemoryRouter>
+          <DistillPage searchParamsOverride={new URLSearchParams('mode=create&workspace_id=stream-reset-test')} />
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+
+    const user = userEvent.setup();
+    await user.type(
+      await screen.findByPlaceholderText('输入或粘贴需要整理的 SOP 流程说明'),
+      'Create a visitor Wi-Fi registration flow',
+    );
+    await user.click(screen.getByRole('button', { name: '发送' }));
+    expect(await screen.findByDisplayValue('Initial Wi-Fi')).toBeTruthy();
+
+    await act(async () => {
+      continueToReset?.();
+      await Promise.resolve();
+    });
+    expect(screen.getByDisplayValue('Initial Wi-Fi')).toBeTruthy();
+
+    await act(async () => {
+      continueToComplete?.();
+      await Promise.resolve();
+    });
+    expect(await screen.findByDisplayValue('Final Wi-Fi')).toBeTruthy();
+  });
+});
+
+function streamingSkill(name: string) {
+  return {
+    skill_id: 'visitor_wifi',
+    name,
+    version: '1.0.0',
+    business_domain: 'it',
+    description: 'Visitor Wi-Fi registration',
+    trigger_intents: ['visitor_wifi_request'],
+    user_utterance_examples: ['Register visitor Wi-Fi'],
+    goal: ['Register visitor details'],
+    required_info: [],
+    slot_filling_policy: {},
+    response_rules: ['Return a clear result'],
+    nodes: [
+      {
+        node_id: 'reply_result',
+        type: 'response',
+        name: 'Return result',
+        instruction: 'Return the registration result.',
+        optional: false,
+        condition: null,
+        expected_user_info: [],
+        allowed_actions: ['answer_user'],
+        knowledge_scope: {},
+        retry_policy: {},
+        metadata: {},
+      },
+    ],
+    edges: [],
+    start_node_id: 'reply_result',
+    terminal_node_ids: ['reply_result'],
+    interruption_policy: {},
+  };
+}

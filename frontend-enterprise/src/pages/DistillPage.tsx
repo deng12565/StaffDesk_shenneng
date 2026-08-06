@@ -894,9 +894,6 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
           }
           if (item.event === 'chunk_reset') {
             streamBuffer = '';
-            latestPreview = createStreamingDraftSeed(payload);
-            latestPreviewSignature = JSON.stringify(latestPreview);
-            setDraft(latestPreview);
             return;
           }
           if (item.event === 'chunk') {

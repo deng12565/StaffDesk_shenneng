@@ -8,9 +8,10 @@ from contextlib import contextmanager
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 from urllib.parse import unquote
 
-from sqlalchemy import Engine, inspect, text
+from sqlalchemy import Engine, event, inspect, text
 from sqlmodel import Session, SQLModel, create_engine
 
 from app.config import get_settings
@@ -33,11 +34,24 @@ def _normalize_database_url(url: str) -> str:
     return f"sqlite:///{(base_dir / path).resolve()}"
 
 
+def _configure_sqlite_connection(dbapi_connection: Any, _connection_record: object) -> None:
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA busy_timeout=30000")
+        # Knowledge routing can require a temporary B-tree. Keep it independent
+        # of TEMP/TMP because desktop launchers may provide a stale directory.
+        cursor.execute("PRAGMA temp_store=MEMORY")
+    finally:
+        cursor.close()
+
+
 settings = get_settings()
 
 database_url = _normalize_database_url(settings.database_url)
 connect_args = {"check_same_thread": False, "timeout": 30} if database_url.startswith("sqlite") else {}
 engine: Engine = create_engine(database_url, echo=False, connect_args=connect_args)
+if database_url.startswith("sqlite"):
+    event.listen(engine, "connect", _configure_sqlite_connection)
 
 _DEFAULT_MODEL_OUTPUT_LIMIT_MIGRATION_ID = "20260712_default_model_output_tokens_8192"
 _LEGACY_DEFAULT_MODEL_OUTPUT_TOKENS = 2048
@@ -108,6 +122,38 @@ def _migrate_sqlite_skill_schema() -> None:
         _migrate_feishu_channel_schema(conn, tables)
         _migrate_channel_inbound_run_schema(conn, tables)
         _migrate_channel_bind_code_constraints(conn, tables)
+
+        if "scheduled_tasks" in tables:
+            scheduled_columns = {
+                column["name"] for column in inspector.get_columns("scheduled_tasks")
+            }
+            scheduled_column_sql = {
+                "execution_kind": (
+                    "ALTER TABLE scheduled_tasks ADD COLUMN execution_kind "
+                    "VARCHAR NOT NULL DEFAULT 'agent_turn'"
+                ),
+                "execution_config_json": (
+                    "ALTER TABLE scheduled_tasks ADD COLUMN execution_config_json JSON"
+                ),
+                "delivery_config_json": (
+                    "ALTER TABLE scheduled_tasks ADD COLUMN delivery_config_json JSON"
+                ),
+            }
+            for column_name, ddl in scheduled_column_sql.items():
+                if column_name not in scheduled_columns:
+                    conn.execute(text(ddl))
+            conn.execute(
+                text(
+                    "UPDATE scheduled_tasks SET execution_config_json = '{}' "
+                    "WHERE execution_config_json IS NULL"
+                )
+            )
+            conn.execute(
+                text(
+                    "UPDATE scheduled_tasks SET delivery_config_json = '{}' "
+                    "WHERE delivery_config_json IS NULL"
+                )
+            )
 
         if "users" in tables:
             user_columns = {column["name"] for column in inspector.get_columns("users")}

@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from pathlib import Path
 
 from sqlalchemy import create_engine, text
@@ -7,6 +8,7 @@ from app import paths
 from app.db.database import (
     _DEFAULT_MODEL_OUTPUT_LIMIT_MIGRATION_ID,
     _MODEL_API_PROTOCOLS_MIGRATION_ID,
+    _configure_sqlite_connection,
     _migrate_default_model_output_limit,
     _migrate_model_api_protocols,
     _normalize_database_url,
@@ -43,6 +45,17 @@ def test_frozen_sqlite_honors_data_dir_override(monkeypatch, tmp_path) -> None:
     result = _normalize_database_url("sqlite:///./skill_agent_loop.db")
     expected = (tmp_path / "skill_agent_loop.db").resolve()
     assert result == f"sqlite:///{expected}"
+
+
+def test_sqlite_connections_keep_temporary_storage_in_memory() -> None:
+    connection = sqlite3.connect(":memory:")
+    try:
+        _configure_sqlite_connection(connection, object())
+
+        assert connection.execute("PRAGMA busy_timeout").fetchone() == (30000,)
+        assert connection.execute("PRAGMA temp_store").fetchone() == (2,)
+    finally:
+        connection.close()
 
 
 def test_split_document_recovery_restores_multi_file_knowledge_base(tmp_path) -> None:

@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import signal
 import threading
+import time
 from time import sleep
 
 from sqlmodel import Session
@@ -19,6 +20,7 @@ from app.scheduled_tasks.service import WORKER_SLEEP_SECONDS, due_scheduled_task
 
 _stopped = False
 _background_thread: threading.Thread | None = None
+_last_recruiting_cleanup_monotonic = 0.0
 
 
 def _handle_stop(_signum: int, _frame: object) -> None:
@@ -27,6 +29,7 @@ def _handle_stop(_signum: int, _frame: object) -> None:
 
 
 def run_worker(*, once: bool = False, poll_seconds: float = WORKER_SLEEP_SECONDS) -> None:
+    global _last_recruiting_cleanup_monotonic
     init_db()
     with Session(engine) as db:
         seed_demo_data(db)
@@ -35,6 +38,11 @@ def run_worker(*, once: bool = False, poll_seconds: float = WORKER_SLEEP_SECONDS
             due = due_scheduled_tasks(db)
             for task in due:
                 execute_scheduled_task(db, task)
+            if time.monotonic() - _last_recruiting_cleanup_monotonic >= 24 * 60 * 60:
+                from app.recruiting.service import cleanup_expired_recruiting_data
+
+                cleanup_expired_recruiting_data(db)
+                _last_recruiting_cleanup_monotonic = time.monotonic()
         if once:
             return
         sleep(max(1.0, poll_seconds))

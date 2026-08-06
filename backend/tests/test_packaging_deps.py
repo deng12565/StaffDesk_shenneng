@@ -3,6 +3,7 @@ from pathlib import Path
 
 # 渠道(微信/企微)打包必需依赖:PyInstaller hiddenimports 防回归删漏
 REQUIRED_MODULES = ("aibot", "websockets", "aiohttp", "pyee", "dotenv", "cryptography")
+RECRUITING_SPEC_MODULES = ("fitz", "PIL", "PIL.Image", "win32com", "pythoncom", "pywintypes")
 
 
 def test_packaging_dependencies_importable() -> None:
@@ -15,3 +16,5 @@ def test_pyinstaller_spec_keeps_channel_hiddenimports() -> None:
     content = spec_path.read_text(encoding="utf-8")
     for module in REQUIRED_MODULES:
         assert f'"{module}"' in content, f"packaging/ultrarag.spec 缺少 hiddenimport: {module}"
+    for module in RECRUITING_SPEC_MODULES:
+        assert f'"{module}"' in content, f"packaging/ultrarag.spec missing recruiting hiddenimport: {module}"

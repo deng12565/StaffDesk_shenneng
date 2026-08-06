@@ -7,12 +7,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from difflib import SequenceMatcher
 from typing import Any, TypeVar
 
 from app import paths
 from app.llm import LLMClient, LLMError
 from app.skills.skill_schema import SkillCard, ToolSuggestion
-
 
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "skill_reflection_prompt.md"
 MAX_REFLECTION_ROUNDS = 3
@@ -84,7 +84,8 @@ def reflect_skill_response_stream(
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
     reviewed = response
     reviewed_skill = candidate_skill
-    warnings = list(current_warnings)
+    candidate_warnings = list(current_warnings)
+    source_warnings: list[str] = []
     suggestions = list(tool_suggestions)
     reflection_history: list[dict[str, Any]] = []
 
@@ -99,7 +100,7 @@ def reflect_skill_response_stream(
                     "source_kind": source_kind,
                     "source": source_payload,
                     "candidate_skill": reviewed_skill.model_dump(mode="json"),
-                    "current_warnings": warnings,
+                    "current_warnings": _dedupe([*source_warnings, *candidate_warnings]),
                     "tool_suggestions": [item.model_dump(mode="json") for item in suggestions],
                     "rubrics": RUBRICS,
                     "reflection_round": round_index,
@@ -112,15 +113,19 @@ def reflect_skill_response_stream(
             return normalize_response(
                 {
                     "draft_skill": reviewed_skill.model_dump(mode="json"),
-                    "warnings": [*warnings, f"模型校验未能完成，已保留当前技能草稿：{exc}"],
+                    "warnings": _merge_current_warnings(
+                        source_warnings,
+                        candidate_warnings,
+                        f"模型校验未能完成，已保留当前技能草稿：{exc}",
+                    ),
                     "tool_mentions": [item.model_dump(mode="json") for item in suggestions],
                 }
             )
 
         reflection_history.append(_reflection_history_item(review))
-        review_warnings = _warnings_from_review(review, source_kind)
-        if review_warnings:
-            warnings.extend(review_warnings)
+        source_warnings = _dedupe(
+            [*source_warnings, *_source_warnings_from_review(review, source_kind)]
+        )
 
         failed = _failed_rubrics(review)
         if failed:
@@ -135,7 +140,7 @@ def reflect_skill_response_stream(
             return normalize_response(
                 {
                     "draft_skill": reviewed_skill.model_dump(mode="json"),
-                    "warnings": warnings,
+                    "warnings": _merge_current_warnings(source_warnings, candidate_warnings),
                     "tool_mentions": [
                         *[item.model_dump(mode="json") for item in suggestions],
                         *_list_of_dicts(review.get("tool_mentions")),
@@ -149,10 +154,12 @@ def reflect_skill_response_stream(
             return normalize_response(
                 {
                     "draft_skill": reviewed_skill.model_dump(mode="json"),
-                    "warnings": [
-                        *warnings,
+                    "warnings": _merge_current_warnings(
+                        source_warnings,
+                        candidate_warnings,
+                        *_unresolved_warnings_from_review(review),
                         "模型校验未通过，但未返回可修正 Skill Card，已保留当前草稿。",
-                    ],
+                    ),
                     "tool_mentions": [
                         *[item.model_dump(mode="json") for item in suggestions],
                         *_list_of_dicts(review.get("tool_mentions")),
@@ -161,28 +168,51 @@ def reflect_skill_response_stream(
             )
 
         yield _status_event(f"校验未通过，正在应用第 {round_index} 轮修正")
-        reviewed = normalize_response(
+        next_reviewed = normalize_response(
             {
                 "draft_skill": revised_skill,
-                "warnings": warnings,
+                "warnings": [],
                 "tool_mentions": [
                     *[item.model_dump(mode="json") for item in suggestions],
                     *_list_of_dicts(review.get("tool_mentions")),
                 ],
             }
         )
-        reviewed_skill = getattr(reviewed, "draft_skill")
-        warnings = list(getattr(reviewed, "warnings", warnings))
-        suggestions = list(getattr(reviewed, "tool_suggestions", suggestions))
+        next_skill = getattr(next_reviewed, "draft_skill")
+        next_warnings = list(getattr(next_reviewed, "warnings", []))
+        next_suggestions = list(getattr(next_reviewed, "tool_suggestions", suggestions))
 
-    yield _status_event("校验达到上限，保留最后一版技能草稿")
-    return normalize_response(
-        {
-            "draft_skill": reviewed_skill.model_dump(mode="json"),
-            "warnings": [*warnings, f"模型校验已达到 {MAX_REFLECTION_ROUNDS} 轮上限，保留最后一版技能草稿。"],
-            "tool_mentions": [item.model_dump(mode="json") for item in suggestions],
-        }
-    )
+        if _skill_fingerprint(next_skill) == _skill_fingerprint(reviewed_skill):
+            yield _status_event("修正未产生实际变化，提前结束校验")
+            return next_reviewed.model_copy(
+                update={
+                    "warnings": _merge_current_warnings(
+                        source_warnings,
+                        next_warnings,
+                        *_unresolved_warnings_from_review(review),
+                        "模型修正未改变当前技能草稿，已提前结束重复校验。",
+                    )
+                }
+            )
+
+        reviewed = next_reviewed
+        reviewed_skill = next_skill
+        candidate_warnings = next_warnings
+        suggestions = next_suggestions
+
+        if round_index == MAX_REFLECTION_ROUNDS:
+            yield _status_event("校验达到上限，保留最后一版未复核修正版")
+            return reviewed.model_copy(
+                update={
+                    "warnings": _merge_current_warnings(
+                        source_warnings,
+                        candidate_warnings,
+                        f"模型校验已达到 {MAX_REFLECTION_ROUNDS} 轮上限，最后一版修正尚未再次模型复核。",
+                    )
+                }
+            )
+
+    return reviewed
 
 
 def _model_review(client: LLMClient, prompt: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -193,12 +223,10 @@ def _model_review(client: LLMClient, prompt: str, payload: dict[str, Any]) -> di
     return raw
 
 
-def _warnings_from_review(review: dict[str, Any], source_kind: str) -> list[str]:
+def _source_warnings_from_review(review: dict[str, Any], source_kind: str) -> list[str]:
     warnings: list[str] = []
     for item in _string_list(review.get("source_warnings")):
         warnings.append(f"{_source_label(source_kind)}本身可能存在问题：{item}")
-    for item in _string_list(review.get("warnings")):
-        warnings.append(item)
     for item in _failed_rubrics(review):
         origin = str(item.get("origin") or "").strip()
         if origin != "source_input":
@@ -207,6 +235,26 @@ def _warnings_from_review(review: dict[str, Any], source_kind: str) -> list[str]
         if finding:
             warnings.append(f"{_source_label(source_kind)}本身可能存在问题：{_rubric_label(item)} - {finding}")
     return _dedupe(warnings)
+
+
+def _unresolved_warnings_from_review(review: dict[str, Any]) -> list[str]:
+    warnings = _string_list(review.get("warnings"))
+    for item in _failed_rubrics(review):
+        if str(item.get("origin") or "").strip() == "source_input":
+            continue
+        finding = _finding_text(item)
+        if finding:
+            warnings.append(f"{_rubric_label(item)} - {finding}")
+    return _dedupe(warnings)
+
+
+def _skill_fingerprint(skill: SkillCard) -> str:
+    return json.dumps(
+        skill.model_dump(mode="json"),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 def _failed_rubrics(review: dict[str, Any]) -> list[dict[str, Any]]:
@@ -265,6 +313,40 @@ def _dedupe(values: list[str]) -> list[str]:
         if text and text not in deduped:
             deduped.append(text)
     return deduped
+
+
+def _merge_current_warnings(source_warnings: list[str], *current_warnings: str | list[str]) -> list[str]:
+    sources = _dedupe(source_warnings)
+    merged = list(sources)
+    for value in current_warnings:
+        values = value if isinstance(value, list) else [value]
+        for warning in values:
+            text = str(warning).strip()
+            if text and not any(_warnings_overlap(text, source) for source in sources):
+                merged.append(text)
+    return _dedupe(merged)
+
+
+def _warnings_overlap(left: str, right: str) -> bool:
+    left_text = _warning_comparison_text(left)
+    right_text = _warning_comparison_text(right)
+    if not left_text or not right_text:
+        return False
+    if left_text == right_text:
+        return True
+    shorter, longer = sorted((left_text, right_text), key=len)
+    if len(shorter) >= 12 and shorter in longer:
+        return True
+    return SequenceMatcher(None, left_text, right_text).ratio() >= 0.72
+
+
+def _warning_comparison_text(value: str) -> str:
+    text = value.strip()
+    for prefix in ("原始文档本身可能存在问题：", "原始技能本身可能存在问题："):
+        if text.startswith(prefix):
+            text = text[len(prefix) :]
+            break
+    return "".join(character.casefold() for character in text if character.isalnum() or character == "_")
 
 
 def _emit(status_callback: StatusCallback | None, text: str) -> None:

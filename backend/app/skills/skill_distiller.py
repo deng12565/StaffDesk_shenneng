@@ -35,15 +35,22 @@ MODEL_TOOL_DESCRIPTION_CHAR_LIMIT = 240
 MODEL_TOOL_PARAMETER_LIMIT = 12
 CLOSED_LOOP_RESPONSE_RULE = (
     "流程必须形成闭环：不得把“请稍候/正在处理/稍后反馈”作为最终回复；"
-    "需要外部事实、外部状态或外部副作用时必须调用已配置工具或转人工，并向用户给出明确结果。"
+    "必须向用户说明当前流程实际完成的结果，无法完成时应如实说明能力边界和可用下一步。"
+)
+TOOL_CLOSED_LOOP_RESPONSE_RULE = (
+    "流程包含工具调用时，只有实际获得工具结果后才能声称外部事实、状态或处理已经完成，"
+    "并必须基于工具结果给出最终业务回复。"
+)
+HANDOFF_RESPONSE_RULE = (
+    "流程包含人工转接时，只能在节点明确允许转人工时执行，并应说明已完成事项和待人工处理事项。"
 )
 ADAPTIVE_FLOW_RESPONSE_RULE = (
     "步骤是可自适应推进的目标，不是固定问答脚本；已由当前用户消息、历史信息或路由意图满足的内容"
-    "不得重复追问，应直接推进到下一缺失信息、工具调用或最终回复。"
+    "不得重复追问，应直接推进到下一缺失信息、当前节点允许的执行动作或最终回复。"
 )
 CONFIRMATION_FLOW_RESPONSE_RULE = (
     "涉及外部系统写入、用户资产变更、不可逆操作或明确需要确认的处理时，"
-    "调用工具或执行处理前必须先让用户确认关键对象、范围和操作内容。"
+    "进入相应处理或最终回复前必须先让用户确认关键对象、范围和操作内容。"
 )
 TOOL_STEP_INSTRUCTION_SUFFIX = (
     "工具参数满足时直接调用工具；工具成功后必须基于工具结果进入最终回复，"
@@ -51,9 +58,11 @@ TOOL_STEP_INSTRUCTION_SUFFIX = (
 )
 ADAPTIVE_STEP_INSTRUCTION_SUFFIX = (
     "将本步骤作为目标而不是固定话术；如果用户当前消息、历史 slots 或路由意图已满足本步骤，"
-    "直接写入对应 slot 并继续到下一缺失信息、工具调用或最终回复，不要重复确认。"
+    "直接写入对应 slot 并继续到下一缺失信息、当前节点允许的执行动作或最终回复，不要重复确认。"
 )
-FINAL_RESPONSE_INSTRUCTION_SUFFIX = "给用户明确最终回复；无法闭环时转人工，不要只说请稍候。"
+FINAL_RESPONSE_INSTRUCTION_SUFFIX = (
+    "给用户明确最终回复；无法完成时如实说明能力边界和可用下一步，不要只说请稍候。"
+)
 
 
 class SkillDistiller:
@@ -95,7 +104,6 @@ class SkillDistiller:
                 yield {"event": "chunk", "data": {"content": chunk}}
                 sleep(STREAM_INTERVAL_SECONDS)
         yield {"event": "status", "data": {"text": "正在校验步骤闭环与工具接入"}}
-        before_reflection = response.model_dump(mode="json")
         response = yield from reflect_skill_response_stream(
             client=client,
             source_kind="distill",
@@ -107,11 +115,6 @@ class SkillDistiller:
             normalize_response=lambda raw: self._normalize_response(raw, request),
         )
         yield {"event": "status", "data": {"text": "正在整理校验后的技能草稿"}}
-        if response.model_dump(mode="json") != before_reflection:
-            yield {"event": "chunk_reset", "data": {}}
-            for chunk in _chunk_text(_serialize_response_for_stream(response)):
-                yield {"event": "chunk", "data": {"content": chunk}}
-                sleep(STREAM_INTERVAL_SECONDS)
         yield {"event": "status", "data": {"text": "校验完成，已完成 Skill Card 结构化"}}
         yield {"event": "complete", "data": response.model_dump(mode="json")}
 
@@ -298,6 +301,9 @@ class SkillDistiller:
             warnings.append("模型输出的 start_node_id 不存在，已改为第一个节点。")
         terminal_node_ids = _string_list(draft.get("terminal_node_ids"), fallback.terminal_node_ids)
         terminal_node_ids = [node_id for node_id in terminal_node_ids if node_id in node_id_map] or [nodes[-1]["node_id"]]
+        for node in nodes:
+            if node.get("type") == "terminal" and node.get("node_id") in terminal_node_ids:
+                node["type"] = "response"
         raw_tool_mentions = raw.get("tool_mentions") if isinstance(raw.get("tool_mentions"), list) else raw.get("tool_suggestions")
         tool_resolutions = _normalize_tool_suggestions(raw_tool_mentions, request, [])
         nodes, missing_tool_names = _remove_unknown_tool_actions(
@@ -313,6 +319,10 @@ class SkillDistiller:
         response_rules = _string_list(draft.get("response_rules"), fallback.response_rules)
         if CLOSED_LOOP_RESPONSE_RULE not in response_rules:
             response_rules.append(CLOSED_LOOP_RESPONSE_RULE)
+        if _steps_have_tool_action(nodes) and TOOL_CLOSED_LOOP_RESPONSE_RULE not in response_rules:
+            response_rules.append(TOOL_CLOSED_LOOP_RESPONSE_RULE)
+        if _steps_have_handoff_action(nodes) and HANDOFF_RESPONSE_RULE not in response_rules:
+            response_rules.append(HANDOFF_RESPONSE_RULE)
         if ADAPTIVE_FLOW_RESPONSE_RULE not in response_rules:
             response_rules.append(ADAPTIVE_FLOW_RESPONSE_RULE)
         if _steps_declare_confirmation(nodes) and CONFIRMATION_FLOW_RESPONSE_RULE not in response_rules:
@@ -375,18 +385,21 @@ class SkillDistiller:
             _append_instruction_suffix(node, TOOL_STEP_INSTRUCTION_SUFFIX)
 
         if not _last_step_allows_answer(normalized_nodes):
+            allowed_actions = ["answer_user"]
+            if _steps_have_handoff_action(normalized_nodes):
+                allowed_actions.append("handoff_human")
             normalized_nodes.append(
                 {
                     "node_id": _unique_step_id(normalized_nodes, "reply_final_result"),
                     "type": "response",
                     "name": "反馈最终结果",
                     "instruction": (
-                        "基于已收集信息和工具结果给用户明确最终回复；"
-                        "信息不足时追问缺失信息，无法闭环时转人工，不要只说请稍候；"
+                        "基于已收集信息和已经实际获得的处理结果给用户明确最终回复；"
+                        "信息不足时追问缺失信息，无法完成时如实说明能力边界和可用下一步；"
                         f"{ADAPTIVE_STEP_INSTRUCTION_SUFFIX}"
                     ),
                     "expected_user_info": [],
-                    "allowed_actions": ["answer_user", "handoff_human"],
+                    "allowed_actions": allowed_actions,
                 }
             )
             warnings.append("原始改写缺少最终回复节点，已补充闭环反馈节点。")
@@ -479,22 +492,22 @@ class SkillDistiller:
                 name="理解原始流程",
                 instruction=(
                     "根据原始流程文档理解用户目标、缺失信息和下一步处理方式；"
-                    "不要基于固定话术推进，信息不足时追问，涉及外部事实或外部副作用时转人工或等待人工补充工具配置；"
+                    "不要基于固定话术推进，信息不足时追问，无法完成时如实说明当前能力边界；"
                     f"{ADAPTIVE_STEP_INSTRUCTION_SUFFIX}"
                 ),
                 expected_user_info=[],
-                allowed_actions=["ask_user", "continue_flow", "handoff_human"],
+                allowed_actions=["ask_user", "continue_flow"],
             ),
             SkillGraphNode(
                 node_id="reply_result",
                 type="response",
                 name="反馈结果",
                 instruction=(
-                    "根据已收集的信息和工具结果给用户明确回复；信息不足时继续追问，不要编造事实；"
+                    "根据已收集的信息和已经实际获得的处理结果给用户明确回复；信息不足时继续追问，不要编造事实；"
                     f"{ADAPTIVE_STEP_INSTRUCTION_SUFFIX}"
                 ),
                 expected_user_info=[],
-                allowed_actions=["answer_user", "handoff_human"],
+                allowed_actions=["answer_user"],
             ),
         ]
         return SkillCard(
@@ -529,6 +542,16 @@ def _steps_have_tool_action(steps: list[dict[str, Any]]) -> bool:
     for step in steps:
         actions = step.get("allowed_actions", [])
         if isinstance(actions, list) and any(_is_tool_action(action) for action in actions):
+            return True
+    return False
+
+
+def _steps_have_handoff_action(steps: list[dict[str, Any]]) -> bool:
+    for step in steps:
+        if step.get("type") == "handoff":
+            return True
+        actions = step.get("allowed_actions", [])
+        if isinstance(actions, list) and "handoff_human" in [str(action) for action in actions]:
             return True
     return False
 
@@ -883,10 +906,22 @@ def _string_list(value: Any, fallback: list[str]) -> list[str]:
 
 def _string_dict(value: Any, fallback: dict[str, str]) -> dict[str, str]:
     if isinstance(value, dict):
-        items = {str(key): str(item) for key, item in value.items() if str(key)}
+        items = {
+            str(key): _policy_value_text(item)
+            for key, item in value.items()
+            if str(key) and _policy_value_text(item)
+        }
         if items:
             return items
     return fallback
+
+
+def _policy_value_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (bool, int, float, list, dict)) or value is None:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return str(value).strip()
 
 
 def _slot_filling_policy(
