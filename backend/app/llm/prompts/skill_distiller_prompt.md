@@ -25,7 +25,7 @@ edges 中每条边必须包含 source_node_id、next_node_id、condition、prior
 nodes 中每个 node_id 必须全局唯一，不得重复；如果两个节点语义相近，也必须使用不同 node_id。
 必须输出 start_node_id 和 terminal_node_ids；start_node_id 与 terminal_node_ids 必须引用 nodes 中存在的 node_id。
 节点 type 可选：collect_info、decision、tool_call、knowledge_query、response、handoff、subflow。
-如果原始流程需要工具，请优先从 available_tools 中选择工具，并在 allowed_actions 中使用 call_tool:<tool_name>。
+如果原始流程需要工具，请优先从 available_tools 中选择。HTTP 工具在 allowed_actions 中使用 call_tool:<tool_name>；MCP 工具条目会提供 action=call_mcp:<server_id>，同一 MCP 的叶子工具必须使用该 action 授权整个工具集，不要写成具体 MCP 叶子的 call_tool。
 required_info 和 expected_user_info 应使用稳定的 snake_case 字段名；如果要调用工具，字段名应尽量与工具 input_schema 参数一致。
 所有 instruction 都必须写成“目标导向、可自适应推进”的说明，不要写成固定话术脚本。模型执行时可以根据用户当前消息、历史 slots、路由意图和工具参数满足情况跳过已满足节点。
 如果用户已经明确表达触发意图、类型、分类、数量、身份标识、业务对象编号等信息，后续步骤必须允许模型直接落槽并继续推进，不得要求重复确认同一信息。
@@ -35,7 +35,7 @@ draft_skill 必须包含 slot_filling_policy，且 enabled=true、multi_slot_per
 每个收集信息节点的 instruction 都要说明：用户一次提供多个信息时，需要同时提取并写入对应 slot，不要重复追问已提供的信息；当前节点已满足时直接进入下一缺失信息、工具调用、知识检索或最终回复。
 技能必须形成闭环：完成信息收集后，如果需要外部事实、外部系统写入、状态变更或业务处理，必须设计为调用 available_tools 中合适工具，或明确转人工；不得把“请稍候”“正在处理”“稍后反馈”作为最终可见回复。
 如果流程会产生外部副作用、改变用户资产/权益/状态、提交不可自动撤销的处理，或原始文档明确要求确认，必须在调用工具或执行处理前增加一个确认节点，确认关键对象、范围和操作内容；用户明确确认后才能继续。
-如果节点 allowed_actions 包含 call_tool:<tool_name>，该节点 instruction 必须说明：工具参数满足时直接调用工具，工具成功后基于工具结果进入最终回复，不要停留在等待状态。
+如果节点 allowed_actions 包含 call_tool:<tool_name> 或 call_mcp:<server_id>，该节点 instruction 必须说明：工具参数满足时直接调用工具，工具成功后基于工具结果进入最终回复，不要停留在等待状态。
 终止节点必须允许 answer_user，并要求给用户明确结果；如果工具失败或文档缺失无法闭环，应说明转人工或缺失信息，而不是承诺稍后继续。
 response_rules 必须包含闭环约束：不得只回复请稍候；需要外部事实时必须调用工具或转人工；工具成功后必须给出最终业务结果。
 response_rules 必须包含自适应推进约束：步骤是目标不是脚本；已满足的信息不得重复追问；模型应推进到下一缺失信息、工具调用或最终回复。

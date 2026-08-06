@@ -172,6 +172,7 @@ class SkillVersionRead(BaseModel):
 
 class SkillDistillRequest(BaseModel):
     tenant_id: str
+    agent_id: Optional[str] = None
     title: str
     raw_content: str
     business_domain: Optional[str] = None
@@ -187,6 +188,7 @@ class SkillDistillResponse(BaseModel):
 
 class SkillRewriteRequest(BaseModel):
     tenant_id: str
+    agent_id: Optional[str] = None
     current_skill: SkillCard
     instruction: str
     model_config_id: Optional[str] = None
@@ -203,6 +205,23 @@ class SkillRewriteResponse(BaseModel):
     changed_paths: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     tool_suggestions: list[ToolSuggestion] = Field(default_factory=list)
+
+
+class SkillActionCatalogOption(BaseModel):
+    value: str
+    label: str
+    description: str = ""
+    kind: Literal["control", "mcp_toolset", "http_tool"]
+    tool_id: Optional[str] = None
+    tool_name: Optional[str] = None
+    mcp_server_id: Optional[str] = None
+    tool_count: int = 0
+
+
+class SkillActionCatalogRead(BaseModel):
+    controls: list[SkillActionCatalogOption] = Field(default_factory=list)
+    mcp_toolsets: list[SkillActionCatalogOption] = Field(default_factory=list)
+    http_tools: list[SkillActionCatalogOption] = Field(default_factory=list)
 
 
 class SkillFileExtractRequest(BaseModel):

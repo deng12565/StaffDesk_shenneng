@@ -25,7 +25,16 @@ from app.agents.branching import (
 )
 from app.config import get_settings
 from app.db import get_session
-from app.db.models import AgentProfile, AgentResourceBinding, MCPServer, Tool, User, utc_now
+from app.db.models import (
+    AgentProfile,
+    AgentResourceBinding,
+    AgentSkillBranch,
+    MCPServer,
+    Skill,
+    Tool,
+    User,
+    utc_now,
+)
 from app.security.auth import ensure_current_user_tenant, get_current_user
 from app.security.permissions import (
     ensure_agent_scope_manager,
@@ -38,16 +47,16 @@ from app.tools import ToolExecutor
 from app.tools.http_request import prepare_get_request
 from app.tools.mcp_client import MCPClientError, execute_mcp_tool, list_mcp_tools
 from app.tools.tool_schema import (
+    MCPDiscoveredTool,
     MCPDiscoverRequest,
     MCPDiscoverResponse,
-    MCPDiscoveredTool,
     MCPServerConnection,
     MCPServerCreateRequest,
     MCPServerRead,
     MCPServerUpdateRequest,
-    MCPToolInventoryRead,
     MCPSyncRequest,
     MCPSyncResponse,
+    MCPToolInventoryRead,
     ToolBucketRead,
     ToolCall,
     ToolCreateRequest,
@@ -971,9 +980,62 @@ def sync_mcp_tools(
                 revive=True,
             )
 
+    _refresh_mcp_skill_authorizations(db, row.tenant_id, row.id, touched_tool_ids)
+
     db.add(row)
     db.commit()
     return MCPSyncResponse(success=True, imported=imported, updated=updated, removed=[])
+
+
+def _refresh_mcp_skill_authorizations(
+    db: Session,
+    tenant_id: str,
+    server_id: str,
+    tool_ids: list[str],
+) -> None:
+    action = f"call_mcp:{server_id}"
+    skill_ids: set[str] = set()
+    for row in db.exec(select(Skill).where(Skill.tenant_id == tenant_id)).all():
+        if _skill_content_uses_action(row.content_json, action):
+            skill_ids.add(row.skill_id)
+    for branch in db.exec(
+        select(AgentSkillBranch).where(AgentSkillBranch.tenant_id == tenant_id)
+    ).all():
+        if _skill_content_uses_action(branch.content_json, action):
+            skill_ids.add(branch.skill_id)
+    if not skill_ids:
+        return
+    for tool_id in tool_ids:
+        tool = db.get(Tool, tool_id)
+        if not tool or tool.tenant_id != tenant_id or tool.mcp_server_id != server_id:
+            continue
+        allowed = {
+            str(skill_id).strip()
+            for skill_id in (tool.allowed_skills_json or [])
+            if str(skill_id).strip()
+        }
+        next_allowed = sorted(allowed | skill_ids)
+        if next_allowed == sorted(allowed):
+            continue
+        tool.allowed_skills_json = next_allowed
+        tool.updated_at = utc_now()
+        db.add(tool)
+
+
+def _skill_content_uses_action(content: dict[str, object], action: str) -> bool:
+    for key in ("nodes", "steps"):
+        items = content.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            actions = item.get("allowed_actions")
+            if isinstance(actions, list) and action in {
+                str(value).strip() for value in actions
+            }:
+                return True
+    return False
 
 
 def _discover_response(connection: MCPServerConnection) -> MCPDiscoverResponse:

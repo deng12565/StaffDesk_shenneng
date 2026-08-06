@@ -245,6 +245,9 @@ class LegacyGraphRules:
         if text.startswith("call_tool:"):
             tool_name = text.split(":", 1)[1].strip().strip("`'\"").strip()
             return f"call_tool:{tool_name}" if tool_name else ""
+        if text.startswith("call_mcp:"):
+            server_id = text.split(":", 1)[1].strip().strip("`'\"").strip()
+            return f"call_mcp:{server_id}" if server_id else ""
         return text
 
     @classmethod
@@ -313,6 +316,8 @@ class LegacyGraphRules:
             "ask_clarification",
         }
         return all(
-            action in terminal_actions or action.startswith("call_tool:")
+            action in terminal_actions
+            or action.startswith("call_tool:")
+            or action.startswith("call_mcp:")
             for action in actions
         )

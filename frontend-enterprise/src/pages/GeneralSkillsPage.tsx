@@ -175,7 +175,8 @@ function TraceDisclosureLabel() {
 }
 
 const ENTERPRISE_AGENT_STORAGE_KEY = 'ultrarag_enterprise_agent_scope';
-const GENERAL_SKILL_RUN_TIMEOUT_MS = 120_000;
+export const GENERAL_SKILL_STREAM_INACTIVITY_MS = 30_000;
+export const GENERAL_SKILL_MAX_ATTEMPTS = 3;
 const FOLDER_INPUT_PROPS = {
   webkitdirectory: '',
   directory: '',
@@ -218,9 +219,12 @@ type SkillDirectoryEntry = SkillFileSystemEntry & {
 const PHASE_LABELS: Record<string, string> = {
   skill_loaded: '加载技能',
   planning: '生成执行方案',
-  plan_created: '生成代码',
+  plan_created: '生成执行方案',
+  direct_execution_started: '直接执行',
+  direct_execution_finished: '完成执行',
   attempt_started: '开始运行',
   running_code: '运行代码',
+  code_validation_failed: '代码语法校验失败',
   stdout_chunk: '运行输出',
   stderr_chunk: '错误输出',
   code_finished: '读取运行结果',
@@ -228,13 +232,44 @@ const PHASE_LABELS: Record<string, string> = {
   reflection_passed: '校验通过',
   reflection_retrying: '反思修复',
   reflection_stopped: '停止重试',
-  repair_planning: '重新生成代码',
+  repair_planning: '重新生成方案',
   repair_failed: '修复失败',
   plan_failed: '生成失败',
   replying: '生成回复',
   reply_created: '完成回复',
   reply_failed: '回复失败',
+  run_cancelled: '运行已取消',
 };
+
+export function createGeneralSkillStreamWatchdog(
+  onTimeout: () => void,
+  timeoutMs = GENERAL_SKILL_STREAM_INACTIVITY_MS,
+) {
+  let timeoutId: number | undefined;
+  return {
+    touch() {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      timeoutId = window.setTimeout(onTimeout, timeoutMs);
+    },
+    stop() {
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+      timeoutId = undefined;
+    },
+  };
+}
+
+export function generalSkillRunFailureMessage(
+  timedOut: boolean,
+  lastFailure: string,
+  error: unknown,
+): string {
+  if (timedOut) {
+    return lastFailure
+      ? `${lastFailure}；运行连接已中断（30 秒未收到服务端事件）。`
+      : '技能运行连接已中断（30 秒未收到服务端事件）。';
+  }
+  return lastFailure || (error instanceof Error ? error.message : '运行失败');
+}
 
 function formatJson(value: unknown): string {
   if (value === undefined || value === null || value === '') return '';
@@ -1775,10 +1810,12 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
     });
     const controller = new AbortController();
     let timedOut = false;
-    const timeoutId = window.setTimeout(() => {
+    let lastFailure = '';
+    const watchdog = createGeneralSkillStreamWatchdog(() => {
       timedOut = true;
       controller.abort();
-    }, GENERAL_SKILL_RUN_TIMEOUT_MS);
+    });
+    watchdog.touch();
     try {
       let completed = false;
       await streamPost(
@@ -1789,11 +1826,23 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
           user_id: 'enterprise_demo',
           query,
           model_config_id: selectedRunModelId || undefined,
-          max_attempts: 10,
+          max_attempts: GENERAL_SKILL_MAX_ATTEMPTS,
         },
         (item) => {
+          watchdog.touch();
           if (item.event === 'trace') {
             const traceItem = item.data;
+            const structured = typeof traceItem.structured_result === 'object' && traceItem.structured_result
+              ? traceItem.structured_result as Record<string, unknown>
+              : undefined;
+            const traceFailure = typeof traceItem.error === 'string'
+              ? traceItem.error
+              : typeof structured?.message === 'string'
+                ? structured.message
+                : typeof structured?.error === 'string'
+                  ? structured.error
+                  : '';
+            if (traceFailure.trim()) lastFailure = traceFailure.trim();
             setLiveResult((current) => {
               const previous = current || { skill_slug: slug, execution_trace: [] };
               const executionTrace = [...(previous.execution_trace || []), traceItem];
@@ -1824,10 +1873,21 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
             completed = true;
             setRunResult(result);
             setLiveResult(null);
-            notify.success('运行完成');
+            if (result.structured_result?.success === false) {
+              const failure = typeof result.structured_result.message === 'string'
+                ? result.structured_result.message
+                : typeof result.structured_result.error === 'string'
+                  ? result.structured_result.error
+                  : '运行失败';
+              lastFailure = failure;
+              notify.error(failure);
+            } else {
+              notify.success('运行完成');
+            }
           }
           if (item.event === 'error') {
             const text = typeof item.data.message === 'string' ? item.data.message : '运行失败';
+            lastFailure = text;
             completed = true;
             setLiveResult((current) => ({
               ...(current || { skill_slug: slug, execution_trace: [] }),
@@ -1844,9 +1904,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
         notify.warning('运行流已结束，但未收到最终结果');
       }
     } catch (error) {
-      const text = timedOut
-        ? '技能运行超时，请检查模型或稍后重试。'
-        : error instanceof Error ? error.message : '运行失败';
+      const text = generalSkillRunFailureMessage(timedOut, lastFailure, error);
       setLiveResult((current) => ({
         ...(current || { skill_slug: slug, execution_trace: [] }),
         stderr: text,
@@ -1855,7 +1913,7 @@ function GeneralSkillEditorPage({ mode, currentUser, onLogout }: { mode: 'new' |
       }));
       notify.error(text);
     } finally {
-      window.clearTimeout(timeoutId);
+      watchdog.stop();
       setLoading(false);
     }
   }

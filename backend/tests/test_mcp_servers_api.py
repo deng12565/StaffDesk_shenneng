@@ -16,8 +16,12 @@ from app.api.tools import (
     list_tools,
     sync_mcp_tools,
 )
-from app.db.models import MCPServer, Tenant, Tool, User
+from app.core import AgentLoop
+from app.core.step_agent import StepAgent
+from app.db.models import ChatSession, MCPServer, ModelConfig, Skill, Tenant, Tool, User
 from app.db.models import AgentProfile, AgentResourceBinding
+from app.llm import LLMClient
+from app.security.encryption import encrypt_secret
 from app.tools.tool_executor import ToolExecutor
 from app.tools.tool_schema import (
     MCPDiscoverRequest,
@@ -136,6 +140,137 @@ def test_sync_mcp_tools_imports_tools_and_executes() -> None:
         )
         assert result.success is True
         assert result.data == {"text": "hi", "length": 2}
+
+
+def test_call_mcp_toolset_selects_a_leaf_tool_and_executes_end_to_end(monkeypatch) -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        agent = AgentProfile(
+            id="agent_mcp_demo",
+            tenant_id="tenant_demo",
+            name="MCP 演示员工",
+            is_overall=True,
+        )
+        db.add(agent)
+        db.commit()
+
+        server = create_mcp_server(
+            MCPServerCreateRequest(
+                tenant_id="tenant_demo",
+                name="builtin_demo_group",
+                display_name="内置 Demo MCP",
+                connection=MCPServerConnection(transport="builtin"),
+            ),
+            db,
+            _admin_user(),
+        )
+        skill = Skill(
+            tenant_id="tenant_demo",
+            skill_id="demo_mcp_group_skill",
+            name="Demo MCP 工具集技能",
+            status="published",
+            content_json={
+                "skill_id": "demo_mcp_group_skill",
+                "name": "Demo MCP 工具集技能",
+                "version": "1.0.0",
+                "start_node_id": "call_demo",
+                "nodes": [
+                    {
+                        "node_id": "call_demo",
+                        "name": "调用 Demo MCP",
+                        "type": "tool_call",
+                        "allowed_actions": [f"call_mcp:{server.id}"],
+                    }
+                ],
+                "edges": [],
+            },
+        )
+        db.add(skill)
+        db.commit()
+
+        sync = sync_mcp_tools(
+            server.id,
+            MCPSyncRequest(tenant_id="tenant_demo", tool_names=["echo", "sum"]),
+            db,
+            current_user=_admin_user(),
+        )
+        assert sync.success is True
+
+        loop = AgentLoop(db)
+        visible_tools = loop._list_enabled_tools("tenant_demo", agent.id)  # noqa: SLF001
+        scoped_tools = loop._step_agent_tools(  # noqa: SLF001
+            skill,
+            visible_tools,
+            active_step_id="call_demo",
+        )
+        assert {tool.name for tool in scoped_tools} == {
+            "builtin_demo_group.echo",
+            "builtin_demo_group.sum",
+        }
+        assert all(skill.skill_id in tool.allowed_skills_json for tool in scoped_tools)
+
+        def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+            available_tools = payload["available_tools"]
+            assert {tool["name"] for tool in available_tools} == {
+                "builtin_demo_group.echo",
+                "builtin_demo_group.sum",
+            }
+            return {
+                "action": "call_tool",
+                "tool_call": {
+                    "name": "builtin_demo_group.echo",
+                    "arguments": {"text": "hello MCP"},
+                },
+            }
+
+        monkeypatch.setattr(LLMClient, "__init__", lambda self, model_config: None)
+        monkeypatch.setattr(LLMClient, "generate_json", fake_generate_json)
+        selected = StepAgent().run(
+            "请使用 Demo MCP 回显 hello MCP",
+            ChatSession(
+                id="session_mcp_demo",
+                tenant_id="tenant_demo",
+                user_id="user_demo",
+                active_skill_id=skill.skill_id,
+                active_step_id="call_demo",
+            ),
+            skill,
+            scoped_tools,
+            ModelConfig(
+                tenant_id="tenant_demo",
+                name="Fake model",
+                api_key_encrypted=encrypt_secret("test-key"),
+                model="fake",
+                enabled=True,
+            ),
+        )
+
+        assert selected.tool_call is not None
+        result = ToolExecutor(db).execute(
+            tenant_id="tenant_demo",
+            tool_call=selected.tool_call,
+            active_skill_id=skill.skill_id,
+            agent_id=agent.id,
+        )
+        assert result.success is True
+        assert result.data == {"text": "hello MCP", "length": 9}
+
+        server_row = db.get(MCPServer, server.id)
+        assert server_row is not None
+        server_row.enabled = False
+        db.add(server_row)
+        db.commit()
+        assert loop._list_enabled_tools("tenant_demo", agent.id) == []  # noqa: SLF001
+        disabled_result = ToolExecutor(db).execute(
+            tenant_id="tenant_demo",
+            tool_call=selected.tool_call,
+            active_skill_id=skill.skill_id,
+            agent_id=agent.id,
+        )
+        assert disabled_result.success is False
+        assert disabled_result.error is not None
+        assert disabled_result.error.code == "MCP_ERROR"
+        assert "未启用" in disabled_result.error.message
 
 
 def test_mcp_server_counts_and_cached_inventory_are_scope_aware(monkeypatch) -> None:

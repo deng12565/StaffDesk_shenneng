@@ -77,6 +77,7 @@ from app.db.models import (
     ChatSession,
     GeneralSkill,
     HumanHandoffRequest,
+    MCPServer,
     Message,
     ModelConfig,
     PersonaConfig,
@@ -4243,6 +4244,11 @@ class AgentLoop:
             for action in actions
             if action.startswith("call_tool:") and ":" in action
         }
+        explicit_mcp_server_ids = {
+            action.split(":", 1)[1]
+            for action in actions
+            if action.startswith("call_mcp:") and ":" in action
+        }
         allow_any_tool = "call_tool" in actions
         active_skill_id = active_skill.skill_id
         scoped_tools: list[Tool] = []
@@ -4255,7 +4261,12 @@ class AgentLoop:
                 if allow_general_skill_selection:
                     general_skill_tools.append(tool)
                 continue
-            if not allow_any_tool and tool_name not in explicit_tool_names:
+            mcp_server_id = str(getattr(tool, "mcp_server_id", "") or "")
+            if (
+                not allow_any_tool
+                and tool_name not in explicit_tool_names
+                and mcp_server_id not in explicit_mcp_server_ids
+            ):
                 continue
             allowed_skills = [
                 str(skill_id)
@@ -4993,7 +5004,8 @@ class AgentLoop:
                 return step_id
             actions = self._step_actions(step)
             if self._actions_allow_final_reply(actions) or any(
-                action.startswith("call_tool:") for action in actions
+                action.startswith("call_tool:") or action.startswith("call_mcp:")
+                for action in actions
             ):
                 return step_id
         return None
@@ -5474,7 +5486,29 @@ class AgentLoop:
         return skill, selection
 
     def _list_enabled_tools(self, tenant_id: str, agent_id: str | None = None) -> list[Tool]:
-        return visible_tool_rows(self.db, tenant_id, agent_id, include_inactive=False)
+        tools = visible_tool_rows(self.db, tenant_id, agent_id, include_inactive=False)
+        server_ids = {
+            str(tool.mcp_server_id)
+            for tool in tools
+            if tool.tool_type == "mcp" and tool.mcp_server_id
+        }
+        enabled_server_ids = {
+            server.id
+            for server in self.db.exec(
+                select(MCPServer).where(
+                    MCPServer.tenant_id == tenant_id,
+                    MCPServer.id.in_(sorted(server_ids)),
+                    MCPServer.enabled == True,  # noqa: E712
+                )
+            ).all()
+        } if server_ids else set()
+        return [
+            tool
+            for tool in tools
+            if tool.tool_type != "mcp"
+            or not tool.mcp_server_id
+            or str(tool.mcp_server_id or "") in enabled_server_ids
+        ]
 
     def _tools_with_general_skills(
         self, tenant_id: str, tools: list[Tool], agent_id: str | None = None

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import codecs
 import json
 import os
 import queue
@@ -14,6 +15,8 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import mkdtemp
 from typing import Any
@@ -46,7 +49,9 @@ REPLY_PROMPT = PROMPT_DIR / "general_skill_reply_prompt.md"
 RUN_TIMEOUT_SECONDS = 12
 MAX_OUTPUT_CHARS = 20000
 GENERAL_SKILL_MAX_TOKENS = 8192
-GENERAL_SKILL_MAX_ATTEMPTS = 10
+GENERAL_SKILL_MAX_ATTEMPTS = 3
+GENERAL_SKILL_MODEL_TIMEOUT_SECONDS = 90.0
+GENERAL_SKILL_TOTAL_TIMEOUT_SECONDS = 180.0
 TraceSink = Callable[[dict[str, Any]], None]
 GENERAL_SKILL_SELECTION_OUTPUT = {
     "use_tool": "boolean",
@@ -59,10 +64,13 @@ GENERAL_SKILL_SELECTION_OUTPUT = {
     "reason": "string?",
 }
 GENERAL_SKILL_PLAN_OUTPUT = {
+    "execution_mode": "direct | runner",
     "code": "string",
     "runtime": "bash | python",
     "rationale": "string?",
     "expected_output": "string?",
+    "structured_result": "object",
+    "reply": "string?",
 }
 GENERAL_SKILL_REVIEW_OUTPUT = {
     "result_sufficient": "boolean",
@@ -72,6 +80,22 @@ GENERAL_SKILL_REVIEW_OUTPUT = {
     "repair_hint": "string?",
 }
 GENERAL_SKILL_REPLY_OUTPUT = {"reply": "string"}
+
+
+@dataclass(frozen=True)
+class _RunControl:
+    deadline: float
+    cancel_event: threading.Event
+    runtime_timeout_seconds: float
+
+
+_ACTIVE_RUN_CONTROL: ContextVar[_RunControl | None] = ContextVar(
+    "general_skill_run_control", default=None
+)
+
+
+class GeneralSkillRunCancelled(RuntimeError):
+    pass
 
 
 class GeneralSkillSelector:
@@ -149,11 +173,44 @@ class GeneralSkillRunner:
         event_sink: TraceSink | None = None,
         conversation_context: dict[str, object] | None = None,
         memory_context: list[dict[str, object]] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> GeneralSkillRunResponse:
+        control = _RunControl(
+            deadline=time.monotonic() + GENERAL_SKILL_TOTAL_TIMEOUT_SECONDS,
+            cancel_event=cancel_event or threading.Event(),
+            runtime_timeout_seconds=_runtime_timeout_seconds(skill),
+        )
+        token = _ACTIVE_RUN_CONTROL.set(control)
+        try:
+            return self._run(
+                skill,
+                query,
+                model_config,
+                user_id,
+                max_attempts,
+                event_sink,
+                conversation_context,
+                memory_context,
+            )
+        finally:
+            _ACTIVE_RUN_CONTROL.reset(token)
+
+    def _run(
+        self,
+        skill: GeneralSkill,
+        query: str,
+        model_config: ModelConfig,
+        user_id: str,
+        max_attempts: int,
+        event_sink: TraceSink | None,
+        conversation_context: dict[str, object] | None,
+        memory_context: list[dict[str, object]] | None,
     ) -> GeneralSkillRunResponse:
         trace: list[dict[str, Any]] = []
         max_attempts = max(1, min(max_attempts, GENERAL_SKILL_MAX_ATTEMPTS))
         _emit(trace, {"phase": "skill_loaded", "message": f"已加载通用技能 {skill.name}", "slug": skill.slug}, event_sink)
         try:
+            _raise_if_run_stopped("生成执行方案")
             plan, planning_attempts = self._generate_plan_with_reflection(
                 skill,
                 query,
@@ -164,16 +221,90 @@ class GeneralSkillRunner:
                 conversation_context,
                 memory_context,
             )
-        except LLMError as exc:
-            _emit(trace, {"phase": "plan_failed", "message": "模型生成 runner 失败", "error": str(exc)}, event_sink)
+        except GeneralSkillRunCancelled as exc:
+            structured_result = _cancelled_result(str(exc))
+            _emit(
+                trace,
+                {
+                    "phase": "run_cancelled",
+                    "message": str(exc),
+                    "structured_result": structured_result,
+                },
+                event_sink,
+            )
             return GeneralSkillRunResponse(
                 skill_slug=skill.slug,
                 execution_trace=trace,
                 generated_code="",
                 stdout="",
                 stderr=str(exc),
-                structured_result={"success": False, "error": "runner_plan_failed", "message": str(exc)},
-                reply="抱歉，当前通用技能执行代码生成失败，暂时无法完成这次运行。",
+                structured_result=structured_result,
+                reply=_fallback_reply(structured_result),
+            )
+        except LLMError as exc:
+            _emit(trace, {"phase": "plan_failed", "message": "模型生成执行方案失败", "error": str(exc)}, event_sink)
+            return GeneralSkillRunResponse(
+                skill_slug=skill.slug,
+                execution_trace=trace,
+                generated_code="",
+                stdout="",
+                stderr=str(exc),
+                structured_result={"success": False, "error": "execution_plan_failed", "message": str(exc)},
+                reply="抱歉，当前通用技能执行方案生成失败，暂时无法完成这次运行。",
+            )
+
+        if plan.execution_mode == "direct":
+            try:
+                _raise_if_run_stopped("直接执行技能")
+            except GeneralSkillRunCancelled as exc:
+                structured_result = _cancelled_result(str(exc))
+                _emit(
+                    trace,
+                    {
+                        "phase": "run_cancelled",
+                        "message": str(exc),
+                        "structured_result": structured_result,
+                    },
+                    event_sink,
+                )
+                return GeneralSkillRunResponse(
+                    skill_slug=skill.slug,
+                    execution_trace=trace,
+                    generated_code="",
+                    stdout="",
+                    stderr=str(exc),
+                    structured_result=structured_result,
+                    reply=_fallback_reply(structured_result),
+                )
+            structured_result = dict(plan.structured_result or {})
+            structured_result.setdefault("success", True)
+            _emit(
+                trace,
+                {
+                    "phase": "direct_execution_started",
+                    "message": "正在直接执行文本技能",
+                    "execution_mode": "direct",
+                },
+                event_sink,
+            )
+            _emit(
+                trace,
+                {
+                    "phase": "direct_execution_finished",
+                    "message": "文本技能执行完成",
+                    "execution_mode": "direct",
+                    "structured_result": structured_result,
+                },
+                event_sink,
+            )
+            return GeneralSkillRunResponse(
+                skill_slug=skill.slug,
+                execution_trace=trace,
+                generated_code="",
+                stdout="",
+                stderr="",
+                structured_result=structured_result,
+                reply=str(plan.reply or "").strip(),
             )
 
         attempts: list[dict[str, Any]] = planning_attempts
@@ -181,6 +312,22 @@ class GeneralSkillRunner:
         stderr = ""
         structured_result: dict[str, Any] = {}
         for attempt in range(1, max_attempts + 1):
+            try:
+                _raise_if_run_stopped(f"第 {attempt} 次运行")
+            except GeneralSkillRunCancelled as exc:
+                structured_result = _cancelled_result(str(exc), structured_result)
+                stderr = str(exc)
+                _emit(
+                    trace,
+                    {
+                        "phase": "run_cancelled",
+                        "message": str(exc),
+                        "attempt": attempt,
+                        "structured_result": structured_result,
+                    },
+                    event_sink,
+                )
+                break
             _emit(
                 trace,
                 {"phase": "attempt_started", "message": f"开始第 {attempt} 次运行", "attempt": attempt},
@@ -196,20 +343,39 @@ class GeneralSkillRunner:
                 attempt,
             )
             _normalize_failure_diagnostics(structured_result)
-            review = self._review_execution_result(
-                skill,
-                query,
-                model_config,
-                plan,
-                stdout,
-                stderr,
-                structured_result,
-                trace,
-                event_sink,
-                attempt,
-                conversation_context,
-                memory_context,
-            )
+            if structured_result.get("error") == "runner_syntax_error":
+                review = {
+                    "result_sufficient": False,
+                    "needs_retry": True,
+                    "terminal": False,
+                    "reason": str(structured_result.get("message") or "Runner 语法检查失败"),
+                    "repair_hint": "根据准确的语法错误行号修复代码，不要重复上一版代码。",
+                }
+                _emit(
+                    trace,
+                    {
+                        "phase": "reflection_reviewed",
+                        "message": "语法错误已直接进入代码修复",
+                        "attempt": attempt,
+                        "review": review,
+                    },
+                    event_sink,
+                )
+            else:
+                review = self._review_execution_result(
+                    skill,
+                    query,
+                    model_config,
+                    plan,
+                    stdout,
+                    stderr,
+                    structured_result,
+                    trace,
+                    event_sink,
+                    attempt,
+                    conversation_context,
+                    memory_context,
+                )
             attempts.append(
                 {
                     "attempt": attempt,
@@ -277,7 +443,7 @@ class GeneralSkillRunner:
                     conversation_context,
                     memory_context,
                 )
-            except LLMError as exc:
+            except (LLMError, GeneralSkillRunCancelled) as exc:
                 _emit(
                     trace,
                     {"phase": "repair_failed", "message": "模型反思修复代码失败", "attempt": attempt, "error": str(exc)},
@@ -286,6 +452,7 @@ class GeneralSkillRunner:
                 break
 
         try:
+            _raise_if_run_stopped("生成最终回复")
             reply = self._generate_reply(
                 skill,
                 query,
@@ -298,7 +465,7 @@ class GeneralSkillRunner:
                 conversation_context,
                 memory_context,
             )
-        except LLMError as exc:
+        except (LLMError, GeneralSkillRunCancelled) as exc:
             _emit(trace, {"phase": "reply_failed", "message": "模型生成最终回复失败", "error": str(exc)}, event_sink)
             reply = _fallback_reply(structured_result)
         return GeneralSkillRunResponse(
@@ -321,7 +488,7 @@ class GeneralSkillRunner:
         conversation_context: dict[str, object] | None = None,
         memory_context: list[dict[str, object]] | None = None,
     ) -> GeneralSkillExecutionPlan:
-        _emit(trace, {"phase": "planning", "message": "正在根据 SKILL.md 生成 runner"}, event_sink)
+        _emit(trace, {"phase": "planning", "message": "正在根据 SKILL.md 选择执行方式"}, event_sink)
         stage_data = {
             "skill": {
                 "slug": skill.slug,
@@ -340,7 +507,7 @@ class GeneralSkillRunner:
                     "skill_workspace": "<runtime absolute path to the restored skill folder>",
                     "skill_files": [file["path"] for file in _skill_files(skill)],
                 },
-                "timeout_seconds": RUN_TIMEOUT_SECONDS,
+                "timeout_seconds": _active_runtime_timeout_seconds(),
             },
         }
         payload = stage_payload(
@@ -353,20 +520,35 @@ class GeneralSkillRunner:
             output_contract=GENERAL_SKILL_PLAN_OUTPUT,
         )
         with llm_operation("general_skill.plan"):
-            raw = LLMClient(_with_min_tokens(model_config, GENERAL_SKILL_MAX_TOKENS)).generate_json(
+            raw = LLMClient(_bounded_model_config(model_config, GENERAL_SKILL_MAX_TOKENS)).generate_json(
                 unified_system_prompt(),
                 payload,
             )
-        plan = GeneralSkillExecutionPlan.model_validate(raw)
+        try:
+            plan = GeneralSkillExecutionPlan.model_validate(raw)
+        except Exception as exc:
+            raise LLMError(f"General skill execution plan returned invalid schema: {exc}") from exc
         plan.runtime = _plan_runtime(plan)
-        if not plan.code.strip():
-            raise LLMError("General skill runner code is empty")
+        if plan.execution_mode == "direct":
+            _emit(
+                trace,
+                {
+                    "phase": "plan_created",
+                    "message": "已生成直接执行方案",
+                    "execution_mode": "direct",
+                    "rationale": plan.rationale,
+                    "expected_output": plan.expected_output,
+                },
+                event_sink,
+            )
+            return plan
         runtime_label = _runtime_label(plan.runtime)
         _emit(
             trace,
             {
                 "phase": "plan_created",
                 "message": f"已生成 {runtime_label} runner",
+                "execution_mode": "runner",
                 "runtime": plan.runtime,
                 "rationale": plan.rationale,
                 "code": plan.code,
@@ -500,7 +682,7 @@ class GeneralSkillRunner:
                     "skill_workspace": "<runtime absolute path to the restored skill folder>",
                     "skill_files": [file["path"] for file in _skill_files(skill)],
                 },
-                "timeout_seconds": RUN_TIMEOUT_SECONDS,
+                "timeout_seconds": _active_runtime_timeout_seconds(),
             },
             "previous_attempts": attempts[-3:],
         }
@@ -514,14 +696,29 @@ class GeneralSkillRunner:
             output_contract=GENERAL_SKILL_PLAN_OUTPUT,
         )
         with llm_operation("general_skill.repair", attempt=next_attempt):
-            raw = LLMClient(_with_min_tokens(model_config, GENERAL_SKILL_MAX_TOKENS)).generate_json(
+            raw = LLMClient(_bounded_model_config(model_config, GENERAL_SKILL_MAX_TOKENS)).generate_json(
                 unified_system_prompt(),
                 payload,
             )
-        plan = GeneralSkillExecutionPlan.model_validate(raw)
+        try:
+            plan = GeneralSkillExecutionPlan.model_validate(raw)
+        except Exception as exc:
+            raise LLMError(f"General skill repaired plan returned invalid schema: {exc}") from exc
         plan.runtime = _plan_runtime(plan)
-        if not plan.code.strip():
-            raise LLMError("General skill repaired runner code is empty")
+        if plan.execution_mode == "direct":
+            _emit(
+                trace,
+                {
+                    "phase": "plan_created",
+                    "message": f"已生成第 {next_attempt} 次直接执行方案",
+                    "attempt": next_attempt,
+                    "execution_mode": "direct",
+                    "rationale": plan.rationale,
+                    "expected_output": plan.expected_output,
+                },
+                event_sink,
+            )
+            return plan
         runtime_label = _runtime_label(plan.runtime)
         _emit(
             trace,
@@ -529,6 +726,7 @@ class GeneralSkillRunner:
                 "phase": "plan_created",
                 "message": f"已生成第 {next_attempt} 次 {runtime_label} runner",
                 "attempt": next_attempt,
+                "execution_mode": "runner",
                 "runtime": plan.runtime,
                 "rationale": plan.rationale,
                 "code": plan.code,
@@ -548,12 +746,28 @@ class GeneralSkillRunner:
         event_sink: TraceSink | None = None,
         attempt: int = 1,
     ) -> tuple[str, str, dict[str, Any]]:
+        _raise_if_run_stopped(f"第 {attempt} 次运行")
         run_dir = Path(mkdtemp(prefix="ultrarag_general_skill_"))
         skill_dir = run_dir / "skill"
         _materialize_skill_package(skill, skill_dir)
         runtime = _plan_runtime(plan)
         runner_path = run_dir / ("runner.sh" if runtime == "bash" else "runner.py")
         runner_path.write_text(plan.code, encoding="utf-8")
+        syntax_failure = _runner_syntax_failure(runtime, runner_path, plan.code)
+        if syntax_failure is not None:
+            message = str(syntax_failure["message"])
+            _emit(
+                trace,
+                {
+                    "phase": "code_validation_failed",
+                    "message": message,
+                    "attempt": attempt,
+                    "runtime": runtime,
+                    "structured_result": syntax_failure,
+                },
+                event_sink,
+            )
+            return "", message, syntax_failure
         stdin_payload = {
             "query": query,
             "skill_slug": skill.slug,
@@ -633,16 +847,47 @@ class GeneralSkillRunner:
             process.stdin.close()
 
         try:
-            stdout, stderr, timed_out = _stream_process_output(process, trace, event_sink, attempt)
+            control = _ACTIVE_RUN_CONTROL.get()
+            stdout, stderr, timed_out = _stream_process_output(
+                process,
+                trace,
+                event_sink,
+                attempt,
+                timeout_seconds=_active_runtime_timeout_seconds(),
+                cancel_event=control.cancel_event if control else None,
+            )
         finally:
             if process.poll() is None:
                 process.kill()
                 process.wait()
 
+        control = _ACTIVE_RUN_CONTROL.get()
+        if control and control.cancel_event.is_set():
+            message = "通用技能运行已取消"
+            structured = _cancelled_result(message)
+            _emit(
+                trace,
+                {
+                    "phase": "run_cancelled",
+                    "message": message,
+                    "attempt": attempt,
+                    "runtime": runtime,
+                    "structured_result": structured,
+                },
+                event_sink,
+            )
+            return _truncate(stdout), _truncate(stderr or message), structured
+
         if timed_out:
             stdout = _truncate(stdout)
             stderr = _truncate(stderr)
-            structured = {"success": False, "error": "runner_timeout", "message": "通用技能运行超时"}
+            timeout_seconds = _active_runtime_timeout_seconds()
+            structured = {
+                "success": False,
+                "error": "runner_timeout",
+                "message": f"通用技能运行超过 {timeout_seconds:g} 秒",
+                "retryable": True,
+            }
             _emit(
                 trace,
                 {
@@ -717,11 +962,11 @@ class GeneralSkillRunner:
         )
         try:
             with llm_operation("general_skill.reply"):
-                raw = LLMClient(model_config).generate_json(
+                raw = LLMClient(_bounded_model_config(model_config)).generate_json(
                     unified_system_prompt(), payload
                 )
             reply = GeneralSkillReply.model_validate(raw).reply.strip()
-        except LLMError:
+        except (LLMError, GeneralSkillRunCancelled):
             raise
         except Exception as exc:
             raise LLMError(f"General skill reply returned invalid JSON schema: {exc}") from exc
@@ -784,10 +1029,12 @@ class GeneralSkillRunner:
         )
         try:
             with llm_operation("general_skill.review", attempt=attempt):
-                raw = LLMClient(model_config).generate_json(
+                raw = LLMClient(_bounded_model_config(model_config)).generate_json(
                     unified_system_prompt(), payload
                 )
             review = GeneralSkillExecutionReview.model_validate(raw).model_dump(mode="json")
+        except GeneralSkillRunCancelled:
+            raise
         except Exception as exc:
             fallback_needs_retry = _execution_needs_retry(stdout, stderr, structured_result)
             review = {
@@ -917,10 +1164,13 @@ def _stream_process_output_selectors(
     trace: list[dict[str, Any]],
     event_sink: TraceSink | None,
     attempt: int,
+    timeout_seconds: float = RUN_TIMEOUT_SECONDS,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[str, str, bool]:
     selector = selectors.DefaultSelector()
     stdout_parts: list[str] = []
     stderr_parts: list[str] = []
+    decoders = _utf8_stream_decoders()
     streams: list[tuple[Any, str]] = []
     if process.stdout:
         streams.append((process.stdout, "stdout"))
@@ -930,10 +1180,13 @@ def _stream_process_output_selectors(
         os.set_blocking(stream.fileno(), False)
         selector.register(stream, selectors.EVENT_READ, data=name)
 
-    deadline = time.monotonic() + RUN_TIMEOUT_SECONDS
+    deadline = time.monotonic() + timeout_seconds
     timed_out = False
     try:
         while selector.get_map():
+            if cancel_event and cancel_event.is_set():
+                process.kill()
+                break
             if time.monotonic() > deadline:
                 timed_out = True
                 process.kill()
@@ -948,24 +1201,31 @@ def _stream_process_output_selectors(
                 except BlockingIOError:
                     continue
                 if not chunk:
+                    _append_decoded_output(
+                        name,
+                        b"",
+                        decoders,
+                        stdout_parts,
+                        stderr_parts,
+                        trace,
+                        event_sink,
+                        attempt,
+                        final=True,
+                    )
                     try:
                         selector.unregister(key.fileobj)
                     except KeyError:
                         pass
                     continue
-                text = chunk.decode("utf-8", errors="replace")
-                if name == "stdout":
-                    stdout_parts.append(text)
-                    phase = "stdout_chunk"
-                    message = "收到运行输出"
-                else:
-                    stderr_parts.append(text)
-                    phase = "stderr_chunk"
-                    message = "收到错误输出"
-                _emit(
+                _append_decoded_output(
+                    name,
+                    chunk,
+                    decoders,
+                    stdout_parts,
+                    stderr_parts,
                     trace,
-                    {"phase": phase, "message": message, "attempt": attempt, "text": text},
                     event_sink,
+                    attempt,
                 )
     finally:
         selector.close()
@@ -976,16 +1236,45 @@ def _use_thread_reader() -> bool:
     return sys.platform == "win32"
 
 
-def _stream_process_output(process, trace, event_sink, attempt):
+def _stream_process_output(
+    process,
+    trace,
+    event_sink,
+    attempt,
+    timeout_seconds: float = RUN_TIMEOUT_SECONDS,
+    cancel_event: threading.Event | None = None,
+):
     if _use_thread_reader():
-        return _stream_process_output_threaded(process, trace, event_sink, attempt)
-    return _stream_process_output_selectors(process, trace, event_sink, attempt)
+        return _stream_process_output_threaded(
+            process,
+            trace,
+            event_sink,
+            attempt,
+            timeout_seconds,
+            cancel_event,
+        )
+    return _stream_process_output_selectors(
+        process,
+        trace,
+        event_sink,
+        attempt,
+        timeout_seconds,
+        cancel_event,
+    )
 
 
-def _stream_process_output_threaded(process, trace, event_sink, attempt):
+def _stream_process_output_threaded(
+    process,
+    trace,
+    event_sink,
+    attempt,
+    timeout_seconds: float = RUN_TIMEOUT_SECONDS,
+    cancel_event: threading.Event | None = None,
+):
     q: "queue.Queue[tuple[str, bytes]]" = queue.Queue()
     stdout_parts: list[str] = []
     stderr_parts: list[str] = []
+    decoders = _utf8_stream_decoders()
 
     def _reader(stream, name: str) -> None:
         try:
@@ -1004,10 +1293,13 @@ def _stream_process_output_threaded(process, trace, event_sink, attempt):
         threads.append(t)
 
     open_streams = sum(1 for s, _ in stream_map if s is not None)
-    deadline = time.monotonic() + RUN_TIMEOUT_SECONDS
+    deadline = time.monotonic() + timeout_seconds
     timed_out = False
     eof_count = 0
     while eof_count < open_streams:
+        if cancel_event and cancel_event.is_set():
+            process.kill()
+            break
         if time.monotonic() > deadline:
             timed_out = True
             process.kill()
@@ -1017,20 +1309,69 @@ def _stream_process_output_threaded(process, trace, event_sink, attempt):
         except queue.Empty:
             continue
         if chunk == b"":
+            _append_decoded_output(
+                name,
+                b"",
+                decoders,
+                stdout_parts,
+                stderr_parts,
+                trace,
+                event_sink,
+                attempt,
+                final=True,
+            )
             eof_count += 1
             continue
-        text = chunk.decode("utf-8", errors="replace")
-        if name == "stdout":
-            stdout_parts.append(text)
-            phase, message = "stdout_chunk", "收到运行输出"
-        else:
-            stderr_parts.append(text)
-            phase, message = "stderr_chunk", "收到错误输出"
-        _emit(trace, {"phase": phase, "message": message, "attempt": attempt, "text": text}, event_sink)
+        _append_decoded_output(
+            name,
+            chunk,
+            decoders,
+            stdout_parts,
+            stderr_parts,
+            trace,
+            event_sink,
+            attempt,
+        )
 
     for t in threads:
         t.join(timeout=1.0)
     return "".join(stdout_parts), "".join(stderr_parts), timed_out
+
+
+def _utf8_stream_decoders() -> dict[str, Any]:
+    decoder = codecs.getincrementaldecoder("utf-8")
+    return {
+        "stdout": decoder(errors="replace"),
+        "stderr": decoder(errors="replace"),
+    }
+
+
+def _append_decoded_output(
+    name: str,
+    chunk: bytes,
+    decoders: dict[str, Any],
+    stdout_parts: list[str],
+    stderr_parts: list[str],
+    trace: list[dict[str, Any]],
+    event_sink: TraceSink | None,
+    attempt: int,
+    *,
+    final: bool = False,
+) -> None:
+    text = decoders[name].decode(chunk, final=final)
+    if not text:
+        return
+    if name == "stdout":
+        stdout_parts.append(text)
+        phase, message = "stdout_chunk", "收到运行输出"
+    else:
+        stderr_parts.append(text)
+        phase, message = "stderr_chunk", "收到错误输出"
+    _emit(
+        trace,
+        {"phase": phase, "message": message, "attempt": attempt, "text": text},
+        event_sink,
+    )
 
 
 def _bash_supported() -> bool:
@@ -1090,8 +1431,114 @@ def _normalize_failure_diagnostics(structured_result: dict[str, Any]) -> None:
     )
 
 
-def _with_min_tokens(model_config: ModelConfig, max_output_tokens: int) -> ModelConfig:
-    return snapshot_model_config(model_config, min_output_tokens=max_output_tokens)
+def _runtime_timeout_seconds(skill: GeneralSkill) -> float:
+    config = getattr(skill, "runtime_config_json", None)
+    raw_value = config.get("timeout_seconds") if isinstance(config, Mapping) else None
+    try:
+        timeout_seconds = float(raw_value)
+    except (TypeError, ValueError):
+        return float(RUN_TIMEOUT_SECONDS)
+    if not 1 <= timeout_seconds <= 300:
+        return float(RUN_TIMEOUT_SECONDS)
+    return timeout_seconds
+
+
+def _active_runtime_timeout_seconds() -> float:
+    control = _ACTIVE_RUN_CONTROL.get()
+    return control.runtime_timeout_seconds if control else float(RUN_TIMEOUT_SECONDS)
+
+
+def _bounded_model_config(model_config: ModelConfig, min_output_tokens: int = 0):
+    control = _ACTIVE_RUN_CONTROL.get()
+    snapshot = snapshot_model_config(model_config, min_output_tokens=min_output_tokens)
+    configured_timeout = getattr(snapshot, "timeout_seconds", None)
+    timeout_seconds = GENERAL_SKILL_MODEL_TIMEOUT_SECONDS
+    if configured_timeout is not None:
+        timeout_seconds = min(timeout_seconds, float(configured_timeout))
+    if control:
+        remaining = control.deadline - time.monotonic()
+        if remaining <= 0:
+            raise GeneralSkillRunCancelled("通用技能已达到 180 秒总运行时限")
+        timeout_seconds = min(timeout_seconds, remaining)
+    return replace(snapshot, timeout_seconds=max(1.0, timeout_seconds))
+
+
+def _raise_if_run_stopped(stage: str) -> None:
+    control = _ACTIVE_RUN_CONTROL.get()
+    if not control:
+        return
+    if control.cancel_event.is_set():
+        raise GeneralSkillRunCancelled(f"通用技能已取消，停止在：{stage}")
+    if time.monotonic() >= control.deadline:
+        raise GeneralSkillRunCancelled(f"通用技能已达到 180 秒总运行时限，停止在：{stage}")
+
+
+def _cancelled_result(
+    message: str,
+    previous_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    previous_message = ""
+    if previous_result and previous_result.get("success") is False:
+        previous_message = str(
+            previous_result.get("message") or previous_result.get("error") or ""
+        ).strip()
+    combined = f"{previous_message}；{message}" if previous_message else message
+    return {
+        "success": False,
+        "error": "general_skill_cancelled",
+        "message": combined,
+        "retryable": False,
+    }
+
+
+def _runner_syntax_failure(
+    runtime: str,
+    runner_path: Path,
+    code: str,
+) -> dict[str, Any] | None:
+    if runtime == "python":
+        try:
+            compile(code, str(runner_path), "exec")
+        except SyntaxError as exc:
+            location = f"第 {exc.lineno or '?'} 行"
+            if exc.offset:
+                location += f"，第 {exc.offset} 列"
+            message = f"SyntaxError: {exc.msg}（{location}）"
+            return {
+                "success": False,
+                "error": "runner_syntax_error",
+                "message": message,
+                "exception_type": "SyntaxError",
+                "exception_message": exc.msg,
+                "line": exc.lineno,
+                "offset": exc.offset,
+                "parse_strategy": "python_compile",
+                "retryable": True,
+            }
+        return None
+    if runtime != "bash" or not _bash_supported():
+        return None
+    result = subprocess.run(
+        ["/bin/bash", "-n", str(runner_path)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=5,
+        check=False,
+    )
+    if result.returncode == 0:
+        return None
+    message = (result.stderr or result.stdout or "Bash 语法检查失败").strip()
+    return {
+        "success": False,
+        "error": "runner_syntax_error",
+        "message": message,
+        "exception_type": "BashSyntaxError",
+        "exception_message": message,
+        "parse_strategy": "bash_n",
+        "retryable": True,
+    }
 
 
 def _fallback_reply(structured_result: dict[str, Any]) -> str:

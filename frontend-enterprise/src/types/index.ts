@@ -367,6 +367,23 @@ export type ToolRead = {
   updated_at: string;
 };
 
+export type SkillActionCatalogOption = {
+  value: string;
+  label: string;
+  description: string;
+  kind: 'control' | 'mcp_toolset' | 'http_tool';
+  tool_id?: string;
+  tool_name?: string;
+  mcp_server_id?: string;
+  tool_count: number;
+};
+
+export type SkillActionCatalogRead = {
+  controls: SkillActionCatalogOption[];
+  mcp_toolsets: SkillActionCatalogOption[];
+  http_tools: SkillActionCatalogOption[];
+};
+
 export type MCPTransport = 'stdio' | 'streamable_http' | 'sse' | 'builtin';
 
 export type MCPServerConnection = {

@@ -33,6 +33,7 @@ from app.agents.branching import (
     update_branch_skill,
     user_creator_metadata,
     visible_skill_rows,
+    visible_tool_rows,
 )
 from app.async_jobs import enqueue_async_job
 from app.db import get_session
@@ -40,6 +41,7 @@ from app.db.models import (
     AgentEvent,
     AgentResourceBinding,
     AgentSkillBranchVersion,
+    MCPServer,
     ModelConfig,
     Skill,
     SkillFeedback,
@@ -48,8 +50,8 @@ from app.db.models import (
     User,
     utc_now,
 )
-from app.llm.model_config_resolver import resolve_model_config_for_runtime
 from app.llm import LLMError
+from app.llm.model_config_resolver import resolve_model_config_for_runtime
 from app.security.auth import ensure_current_user_tenant, get_current_user
 from app.security.permissions import (
     ensure_agent_scope_manager,
@@ -59,6 +61,8 @@ from app.security.permissions import (
 from app.security.tenant import ensure_tenant
 from app.skills import SkillDistiller, SkillEditor
 from app.skills.skill_schema import (
+    SkillActionCatalogOption,
+    SkillActionCatalogRead,
     SkillCard,
     SkillCreateRequest,
     SkillDistillRequest,
@@ -68,16 +72,24 @@ from app.skills.skill_schema import (
     SkillRead,
     SkillRewriteRequest,
     SkillRewriteResponse,
-    SkillVersionRead,
     SkillUpdateRequest,
+    SkillVersionRead,
 )
-from app.skills.stream_jobs import SkillStreamEvent, SkillStreamJob, stream_jobs
 from app.skills.step_ids import skill_card_with_unique_step_ids
+from app.skills.stream_jobs import SkillStreamEvent, SkillStreamJob, stream_jobs
 
 router = APIRouter(
     prefix="/api/enterprise/skills",
     tags=["enterprise:skills"],
     dependencies=[Depends(get_current_user)],
+)
+
+SKILL_CONTROL_ACTIONS = (
+    ("ask_user", "询问用户", "向用户收集当前节点缺少的信息。"),
+    ("continue_flow", "继续流程", "当前节点完成后继续进入下一节点。"),
+    ("answer_user", "回复用户", "根据当前流程结果向用户给出明确回复。"),
+    ("handoff_human", "转人工", "当前流程无法自动闭环时转交人工处理。"),
+    ("ask_clarification", "澄清问题", "用户意图或必要信息不明确时进行澄清。"),
 )
 
 
@@ -190,6 +202,18 @@ def list_skills(
     stats = _skill_stats(db, tenant_id)
     recent_stats = _recent_skill_stats(db, tenant_id, stats)
     return [skill_read(row, stats, recent_stats) for row in rows]
+
+
+@router.get("/action-catalog", response_model=SkillActionCatalogRead)
+def get_skill_action_catalog(
+    tenant_id: str = Query(...),
+    agent_id: str | None = Query(default=None),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> SkillActionCatalogRead:
+    ensure_tenant(db, tenant_id)
+    require_agent_scope_viewer(tenant_id, agent_id, current_user, db)
+    return _skill_action_catalog(db, tenant_id, agent_id)
 
 
 @router.post("", response_model=SkillRead)
@@ -648,6 +672,7 @@ def distill_skill(
 ) -> SkillDistillResponse:
     ensure_current_user_tenant(request.tenant_id, current_user)
     ensure_tenant(db, request.tenant_id)
+    require_agent_scope_viewer(request.tenant_id, request.agent_id, current_user, db)
     model_config = _get_request_model(db, request.tenant_id, request.model_config_id)
     request = _with_available_tools(db, request)
     try:
@@ -659,9 +684,12 @@ def distill_skill(
 @router.post("/distill/stream")
 def distill_skill_stream(
     request: SkillDistillRequest,
+    db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
     ensure_current_user_tenant(request.tenant_id, current_user)
+    ensure_tenant(db, request.tenant_id)
+    require_agent_scope_viewer(request.tenant_id, request.agent_id, current_user, db)
     job_id = _start_distill_stream_job(request, current_user)
     return StreamingResponse(_stream_skill_job(job_id), media_type="text/event-stream")
 
@@ -670,6 +698,7 @@ def distill_skill_stream(
 def rewrite_skill_stream(
     skill_id: str,
     request: SkillRewriteRequest,
+    db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
     if request.current_skill.skill_id != skill_id:
@@ -677,6 +706,8 @@ def rewrite_skill_stream(
             status_code=400, detail="Path skill_id must match current_skill.skill_id"
         )
     ensure_current_user_tenant(request.tenant_id, current_user)
+    ensure_tenant(db, request.tenant_id)
+    require_agent_scope_viewer(request.tenant_id, request.agent_id, current_user, db)
     job_id = _start_rewrite_stream_job(skill_id, request, current_user)
     return StreamingResponse(_stream_skill_job(job_id), media_type="text/event-stream")
 
@@ -684,9 +715,12 @@ def rewrite_skill_stream(
 @router.post("/distill/jobs")
 def create_distill_job(
     request: SkillDistillRequest,
+    db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
     ensure_current_user_tenant(request.tenant_id, current_user)
+    ensure_tenant(db, request.tenant_id)
+    require_agent_scope_viewer(request.tenant_id, request.agent_id, current_user, db)
     return {"job_id": _start_distill_stream_job(request, current_user)}
 
 
@@ -694,6 +728,7 @@ def create_distill_job(
 def create_rewrite_job(
     skill_id: str,
     request: SkillRewriteRequest,
+    db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str]:
     if request.current_skill.skill_id != skill_id:
@@ -701,6 +736,8 @@ def create_rewrite_job(
             status_code=400, detail="Path skill_id must match current_skill.skill_id"
         )
     ensure_current_user_tenant(request.tenant_id, current_user)
+    ensure_tenant(db, request.tenant_id)
+    require_agent_scope_viewer(request.tenant_id, request.agent_id, current_user, db)
     return {"job_id": _start_rewrite_stream_job(skill_id, request, current_user)}
 
 
@@ -755,6 +792,7 @@ def rewrite_skill(
         )
     ensure_current_user_tenant(request.tenant_id, current_user)
     ensure_tenant(db, request.tenant_id)
+    require_agent_scope_viewer(request.tenant_id, request.agent_id, current_user, db)
     model_config = _get_request_model(db, request.tenant_id, request.model_config_id)
     request = _with_available_tools_for_rewrite(db, request)
     try:
@@ -906,6 +944,7 @@ def _sync_skill_tool_bindings(
     content: dict[str, object],
 ) -> None:
     tool_names: set[str] = set()
+    mcp_server_ids: set[str] = set()
     for key in ("nodes", "steps"):
         items = content.get(key)
         if not isinstance(items, list):
@@ -918,20 +957,35 @@ def _sync_skill_tool_bindings(
                 continue
             for action in actions:
                 value = str(action or "").strip()
-                if not value.startswith("call_tool:"):
-                    continue
-                tool_name = value.split(":", 1)[1].strip()
-                if tool_name:
-                    tool_names.add(tool_name)
-    if not tool_names:
+                if value.startswith("call_tool:"):
+                    tool_name = value.split(":", 1)[1].strip()
+                    if tool_name:
+                        tool_names.add(tool_name)
+                elif value.startswith("call_mcp:"):
+                    server_id = value.split(":", 1)[1].strip()
+                    if server_id:
+                        mcp_server_ids.add(server_id)
+    if not tool_names and not mcp_server_ids:
         return
 
-    rows = db.exec(
-        select(Tool).where(
-            Tool.tenant_id == tenant_id,
-            Tool.name.in_(sorted(tool_names)),
-        )
-    ).all()
+    rows_by_id: dict[str, Tool] = {}
+    if tool_names:
+        for row in db.exec(
+            select(Tool).where(
+                Tool.tenant_id == tenant_id,
+                Tool.name.in_(sorted(tool_names)),
+            )
+        ).all():
+            rows_by_id[row.id] = row
+    if mcp_server_ids:
+        for row in db.exec(
+            select(Tool).where(
+                Tool.tenant_id == tenant_id,
+                Tool.mcp_server_id.in_(sorted(mcp_server_ids)),
+            )
+        ).all():
+            rows_by_id[row.id] = row
+    rows = list(rows_by_id.values())
     for row in rows:
         allowed_skills = [
             str(item)
@@ -946,53 +1000,167 @@ def _sync_skill_tool_bindings(
 
 
 def _with_available_tools(db: Session, request: SkillDistillRequest) -> SkillDistillRequest:
-    tools = db.exec(
-        select(Tool).where(Tool.tenant_id == request.tenant_id, Tool.enabled == True)  # noqa: E712
-    ).all()
-    available_tools = [
-        *request.available_tools,
-        *[
-            {
-                "id": tool.id,
-                "name": tool.name,
-                "display_name": tool.display_name,
-                "description": tool.description,
-                "bucket": tool.bucket or "未分桶",
-                "method": tool.method,
-                "url": tool.url,
-                "input_schema": tool.input_schema,
-                "output_schema": tool.output_schema,
-            }
-            for tool in tools
-        ],
-    ]
+    available_tools = _trusted_available_tools(
+        db,
+        request.tenant_id,
+        request.agent_id,
+        request.available_tools,
+    )
     return request.model_copy(update={"available_tools": available_tools})
 
 
 def _with_available_tools_for_rewrite(
     db: Session, request: SkillRewriteRequest
 ) -> SkillRewriteRequest:
-    tools = db.exec(
-        select(Tool).where(Tool.tenant_id == request.tenant_id, Tool.enabled == True)  # noqa: E712
-    ).all()
-    available_tools = [
-        *request.available_tools,
-        *[
-            {
-                "id": tool.id,
-                "name": tool.name,
-                "display_name": tool.display_name,
-                "description": tool.description,
-                "bucket": tool.bucket or "未分桶",
-                "method": tool.method,
-                "url": tool.url,
-                "input_schema": tool.input_schema,
-                "output_schema": tool.output_schema,
-            }
-            for tool in tools
-        ],
-    ]
+    available_tools = _trusted_available_tools(
+        db,
+        request.tenant_id,
+        request.agent_id,
+        request.available_tools,
+    )
     return request.model_copy(update={"available_tools": available_tools})
+
+
+def _skill_action_catalog(
+    db: Session,
+    tenant_id: str,
+    agent_id: str | None,
+) -> SkillActionCatalogRead:
+    tools, servers = _visible_enabled_tools_and_servers(db, tenant_id, agent_id)
+    controls = [
+        SkillActionCatalogOption(
+            value=value,
+            label=label,
+            description=description,
+            kind="control",
+        )
+        for value, label, description in SKILL_CONTROL_ACTIONS
+    ]
+    grouped: dict[str, list[Tool]] = {}
+    http_tools: list[SkillActionCatalogOption] = []
+    for tool in tools:
+        if tool.tool_type == "mcp" and tool.mcp_server_id in servers:
+            grouped.setdefault(str(tool.mcp_server_id), []).append(tool)
+            continue
+        if tool.tool_type != "http":
+            continue
+        http_tools.append(
+            SkillActionCatalogOption(
+                value=f"call_tool:{tool.name}",
+                label=f"调用工具：{tool.display_name or tool.name}",
+                description=str(tool.description or ""),
+                kind="http_tool",
+                tool_id=tool.id,
+                tool_name=tool.name,
+            )
+        )
+    mcp_toolsets: list[SkillActionCatalogOption] = []
+    for server_id, child_tools in grouped.items():
+        server = servers[server_id]
+        mcp_toolsets.append(
+            SkillActionCatalogOption(
+                value=f"call_mcp:{server.id}",
+                label=f"使用 MCP：{server.display_name or server.name}",
+                description=str(server.description or ""),
+                kind="mcp_toolset",
+                mcp_server_id=server.id,
+                tool_count=len(child_tools),
+            )
+        )
+    return SkillActionCatalogRead(
+        controls=controls,
+        mcp_toolsets=sorted(mcp_toolsets, key=lambda item: item.label),
+        http_tools=sorted(http_tools, key=lambda item: item.label),
+    )
+
+
+def _trusted_available_tools(
+    db: Session,
+    tenant_id: str,
+    agent_id: str | None,
+    requested_tools: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    tools, servers = _visible_enabled_tools_and_servers(db, tenant_id, agent_id)
+    trusted = [
+        {
+            "id": tool.id,
+            "name": tool.name,
+            "display_name": tool.display_name,
+            "description": tool.description,
+            "bucket": tool.bucket or "未分桶",
+            "method": tool.method,
+            "input_schema": tool.input_schema,
+            "output_schema": tool.output_schema,
+            "kind": "mcp_tool" if tool.tool_type == "mcp" else "http_tool",
+            "action": (
+                f"call_mcp:{tool.mcp_server_id}"
+                if tool.tool_type == "mcp" and tool.mcp_server_id
+                else f"call_tool:{tool.name}"
+            ),
+            "mcp_server_id": tool.mcp_server_id,
+            "mcp_server_name": (
+                servers[str(tool.mcp_server_id)].name
+                if tool.mcp_server_id and str(tool.mcp_server_id) in servers
+                else None
+            ),
+            "mcp_server_display_name": (
+                servers[str(tool.mcp_server_id)].display_name
+                if tool.mcp_server_id and str(tool.mcp_server_id) in servers
+                else None
+            ),
+        }
+        for tool in tools
+        if tool.tool_type != "mcp" or str(tool.mcp_server_id or "") in servers
+    ]
+    if not requested_tools:
+        return trusted
+    requested_keys: set[str] = set()
+    for item in requested_tools:
+        if not isinstance(item, dict):
+            continue
+        for key in ("id", "name", "action"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                requested_keys.add(value)
+    return [
+        item
+        for item in trusted
+        if requested_keys
+        & {
+            str(item.get("id") or ""),
+            str(item.get("name") or ""),
+            str(item.get("action") or ""),
+        }
+    ]
+
+
+def _visible_enabled_tools_and_servers(
+    db: Session,
+    tenant_id: str,
+    agent_id: str | None,
+) -> tuple[list[Tool], dict[str, MCPServer]]:
+    tools = visible_tool_rows(db, tenant_id, agent_id, include_inactive=False)
+    server_ids = {
+        str(tool.mcp_server_id)
+        for tool in tools
+        if tool.tool_type == "mcp" and tool.mcp_server_id
+    }
+    servers = {
+        server.id: server
+        for server in db.exec(
+            select(MCPServer).where(
+                MCPServer.tenant_id == tenant_id,
+                MCPServer.id.in_(sorted(server_ids)),
+                MCPServer.enabled == True,  # noqa: E712
+            )
+        ).all()
+    } if server_ids else {}
+    return [
+        tool
+        for tool in tools
+        if tool.enabled
+        and (tool.tool_type != "mcp" or str(tool.mcp_server_id or "") in servers)
+    ], servers
 
 
 def _sse(event: object, data: object) -> str:

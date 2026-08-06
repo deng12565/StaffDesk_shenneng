@@ -17,11 +17,10 @@ from sqlmodel import Session, select
 from app.agents.branching import visible_tool_rows
 from app.config import get_settings
 from app.db.models import MCPServer, Tool
+from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_service_token
 from app.tools.http_request import prepare_get_request
 from app.tools.mcp_client import MCPClientError, execute_mcp_tool
 from app.tools.tool_schema import ToolCall, ToolError, ToolResult
-from app.security.internal_service import INTERNAL_SERVICE_HEADER, internal_service_token
-
 
 SECRET_PATTERN = re.compile(r"\$\{secret\.([A-Z0-9_]+)\}")
 
@@ -165,6 +164,8 @@ class ToolExecutor:
         server = self.db.get(MCPServer, tool.mcp_server_id)
         if server is None:
             raise MCPClientError("MCP 工具关联的 Server 不存在或已删除。")
+        if not server.enabled:
+            raise MCPClientError("MCP Server 当前未启用。")
         return self._server_client_config(server), tool_name
 
     def _server_client_config(self, server: MCPServer) -> dict[str, Any]:

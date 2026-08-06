@@ -19,7 +19,7 @@ Rubric 定义：
 2. closed_loop：流程是否能走到明确最终回复；是否避免把“请稍候/正在处理/稍后反馈”作为最终可见结果。
 3. adaptive_progression：是否支持一次用户消息抽取多个字段，已满足字段不重复追问，节点是目标而不是固定脚本。
 4. tool_grounding：工具调用是否只使用 available_tools，或使用 tool_suggestions 中 resolution_status 为 existing/new_candidate 且来源明确的工具。若 allowed_actions 引用的工具已出现在 tool_suggestions 中，不得仅因不在 available_tools 而判失败；只有既不在 available_tools、也不在 tool_suggestions(existing/new_candidate) 中的工具才是 grounding 失败。
-5. tool_call_format：allowed_actions 中的工具调用是否完整规范；需要调用工具时必须写成 `call_tool:<tool_name>`，其中 `<tool_name>` 必须是具体工具名；不得只写 `call_tool`、`call_tool:` 或把工具名只写在 instruction 里。
+5. tool_call_format：allowed_actions 中的工具调用是否完整规范；HTTP 工具必须写成 `call_tool:<tool_name>`；已安装 MCP 工具集必须使用 available_tools 提供的 `call_mcp:<server_id>`。不得写裸 `call_tool`、`call_mcp`、空后缀，或把工具名只写在 instruction 里。
 6. side_effect_confirmation：涉及写入、提交、权益/资产/状态变更、不可逆操作时，是否在调用工具或处理前确认关键对象和操作。
 7. interruption_and_recovery：中断、切换、恢复和无法闭环场景是否有清晰策略，不会把用户卡在无下一步的状态。
 

@@ -51,7 +51,10 @@ from app.general_skills import (
     GeneralSkillRunRequest,
     GeneralSkillRunResponse,
 )
-from app.general_skills.runner import GeneralSkillRunner
+from app.general_skills.runner import (
+    GENERAL_SKILL_TOTAL_TIMEOUT_SECONDS,
+    GeneralSkillRunner,
+)
 from app.general_skills.schema import GeneralSkillFile
 from app.llm.model_config_resolver import resolve_model_config_for_runtime
 from app.security.auth import get_current_user
@@ -72,7 +75,7 @@ MAX_CLAWHUB_PACKAGE_BYTES = 96 * 1024 * 1024
 MAX_CLAWHUB_FILE_BYTES = 2 * 1024 * 1024
 MAX_CLAWHUB_FILES = 240
 REMOTE_SKILL_DOWNLOAD_TIMEOUT_SECONDS = 120
-GENERAL_SKILL_STREAM_IDLE_TIMEOUT_SECONDS = 120
+GENERAL_SKILL_STREAM_IDLE_TIMEOUT_SECONDS = 100
 GITHUB_HOSTS = {"github.com", "www.github.com"}
 RAW_GITHUB_HOST = "raw.githubusercontent.com"
 CLAWHUB_HOSTS = {"clawhub.ai", "www.clawhub.ai"}
@@ -633,9 +636,11 @@ def run_general_skill_stream(
 
     def stream_events() -> Iterator[str]:
         events: queue.Queue[tuple[str, dict[str, object]] | None] = queue.Queue()
+        cancel_event = threading.Event()
 
         def sink(item: dict[str, object]) -> None:
-            events.put(("trace", item))
+            if not cancel_event.is_set():
+                events.put(("trace", item))
 
         def worker() -> None:
             try:
@@ -646,42 +651,58 @@ def run_general_skill_stream(
                     current_user.id,
                     request.max_attempts,
                     sink,
+                    cancel_event=cancel_event,
                 )
-                events.put(("complete", response.model_dump(mode="json")))
+                if not cancel_event.is_set():
+                    events.put(("complete", response.model_dump(mode="json")))
             except Exception as exc:  # pragma: no cover - defensive stream boundary
-                events.put(("error", {"message": str(exc)}))
+                if not cancel_event.is_set():
+                    events.put(("error", {"message": str(exc)}))
             finally:
                 events.put(None)
 
         threading.Thread(target=worker, daemon=True).start()
-        yield _sse(
-            "stream_started",
-            {"skill_slug": skill_snapshot.slug, "max_attempts": request.max_attempts},
-        )
-        last_worker_event_at = time.monotonic()
-        while True:
-            try:
-                item = events.get(timeout=5)
-            except queue.Empty:
-                if (
-                    time.monotonic() - last_worker_event_at
-                    > GENERAL_SKILL_STREAM_IDLE_TIMEOUT_SECONDS
-                ):
-                    yield _sse(
-                        "error",
-                        {
-                            "message": "通用技能运行超时，请检查模型配置或稍后重试。",
-                            "code": "general_skill_stream_timeout",
-                        },
-                    )
+        started_at = time.monotonic()
+        last_worker_event_at = started_at
+        last_failure = ""
+        try:
+            yield _sse(
+                "stream_started",
+                {"skill_slug": skill_snapshot.slug, "max_attempts": request.max_attempts},
+            )
+            while True:
+                try:
+                    item = events.get(timeout=5)
+                except queue.Empty:
+                    elapsed = time.monotonic() - started_at
+                    idle = time.monotonic() - last_worker_event_at
+                    if (
+                        elapsed > GENERAL_SKILL_TOTAL_TIMEOUT_SECONDS
+                        or idle > GENERAL_SKILL_STREAM_IDLE_TIMEOUT_SECONDS
+                    ):
+                        cancel_event.set()
+                        detail = last_failure or "模型或执行阶段未在时限内返回具体结果"
+                        yield _sse(
+                            "error",
+                            {
+                                "message": f"{detail}；通用技能运行已超时并停止后续尝试。",
+                                "code": "general_skill_stream_timeout",
+                                "last_failure": last_failure or None,
+                            },
+                        )
+                        return
+                    yield _sse("heartbeat", {"phase": "running"})
+                    continue
+                if item is None:
                     return
-                yield _sse("heartbeat", {"phase": "running"})
-                continue
-            if item is None:
-                return
-            last_worker_event_at = time.monotonic()
-            event, payload = item
-            yield _sse(event, payload)
+                last_worker_event_at = time.monotonic()
+                event, payload = item
+                candidate_failure = _general_skill_failure_message(payload)
+                if candidate_failure:
+                    last_failure = candidate_failure
+                yield _sse(event, payload)
+        finally:
+            cancel_event.set()
 
     return StreamingResponse(stream_events(), media_type="text/event-stream")
 
@@ -1433,3 +1454,15 @@ def _validate_slug(value: str) -> None:
 def _sse(event: object, data: object) -> str:
     payload = json.dumps(data, ensure_ascii=False)
     return f"event: {event}\ndata: {payload}\n\n"
+
+
+def _general_skill_failure_message(payload: dict[str, object]) -> str:
+    structured = payload.get("structured_result")
+    if isinstance(structured, dict) and structured.get("success") is False:
+        message = structured.get("message") or structured.get("error")
+        if message:
+            return str(message).strip()
+    error = payload.get("error")
+    if error:
+        return str(error).strip()
+    return ""

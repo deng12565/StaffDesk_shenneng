@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.tools.tool_schema import ToolCall
 
@@ -81,7 +81,7 @@ class GeneralSkillRunRequest(BaseModel):
     query: str
     session_id: Optional[str] = None
     model_config_id: Optional[str] = None
-    max_attempts: int = Field(default=10, ge=1, le=10)
+    max_attempts: int = Field(default=3, ge=1, le=3)
 
 
 class GeneralSkillRunResponse(BaseModel):
@@ -108,10 +108,23 @@ class GeneralSkillSelection(BaseModel):
 
 
 class GeneralSkillExecutionPlan(BaseModel):
-    code: str
+    execution_mode: Literal["direct", "runner"] = "runner"
+    code: str = ""
     runtime: str = "python"
     rationale: Optional[str] = None
     expected_output: Optional[str] = None
+    structured_result: dict[str, Any] = Field(default_factory=dict)
+    reply: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_execution_payload(self) -> "GeneralSkillExecutionPlan":
+        if self.execution_mode == "direct":
+            if not str(self.reply or "").strip():
+                raise ValueError("Direct general skill plan requires a non-empty reply")
+            return self
+        if not self.code.strip():
+            raise ValueError("Runner general skill plan requires non-empty code")
+        return self
 
 
 class GeneralSkillExecutionReview(BaseModel):

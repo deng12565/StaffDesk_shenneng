@@ -24,7 +24,6 @@ from app.llm.stage_protocol import (
 from app.observability.spans import llm_operation
 from app.session.session_schema import RouterDecision, StepAgentResult
 
-
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "step_agent_prompt.md"
 RULE_PATHS = {
     "repair": paths.resource_dir() / "app" / "llm" / "prompts" / "step_agent_repair_rules.md",
@@ -224,6 +223,11 @@ def _available_tools_for_step(
         for action in actions
         if action.startswith("call_tool:") and ":" in action
     }
+    explicit_mcp_server_ids = {
+        action.split(":", 1)[1]
+        for action in actions
+        if action.startswith("call_mcp:") and ":" in action
+    }
     allow_any = "call_tool" in actions
     projected: list[dict[str, object]] = []
     for tool in tools:
@@ -232,8 +236,12 @@ def _available_tools_for_step(
         name = str(getattr(tool, "name", "") or "").strip()
         if not name:
             continue
+        mcp_server_id = str(getattr(tool, "mcp_server_id", "") or "")
+        is_explicit_mcp_tool = bool(
+            mcp_server_id and mcp_server_id in explicit_mcp_server_ids
+        )
         if not name.startswith(GENERAL_SKILL_TOOL_PREFIX) and (
-            not allow_any and name not in explicit_names
+            not allow_any and name not in explicit_names and not is_explicit_mcp_tool
         ):
             continue
         projected.append(

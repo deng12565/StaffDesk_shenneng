@@ -10,7 +10,9 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from app.api.chat import _active_skill_context_for_assistant_message, _active_skill_for_assistant_message
 from app.api.skills import (
     _extract_uploaded_skill_file,
+    _skill_action_catalog,
     _skill_stats,
+    _trusted_available_tools,
     create_skill,
     draft_skill,
     distill_skill,
@@ -21,8 +23,12 @@ from app.api.skills import (
     skill_read,
     update_skill,
 )
-from app.agents.branching import ensure_open_gallery_binding, visible_published_skills
-from app.db.models import AgentEvent, AgentProfile, Message, Skill, SkillFeedback, SkillVersion, Tenant, Tool, User
+from app.agents.branching import (
+    ensure_open_gallery_binding,
+    ensure_private_resource_binding,
+    visible_published_skills,
+)
+from app.db.models import AgentEvent, AgentProfile, AgentResourceBinding, MCPServer, Message, Skill, SkillFeedback, SkillVersion, Tenant, Tool, User
 from app.db.models import ModelConfig
 from app.skills.skill_distiller import SkillDistiller
 from app.skills.skill_editor import SkillEditor
@@ -597,6 +603,193 @@ def test_personal_created_skill_binds_explicit_tools_to_its_skill_id() -> None:
             "skill_price_compare_001",
             "price_compare_copy",
         ]
+
+
+def test_skill_action_catalog_groups_visible_mcp_tools_without_connections_or_secrets() -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        owner = AgentProfile(
+            id="agent_catalog_owner",
+            tenant_id="tenant_demo",
+            name="员工 A",
+            is_overall=False,
+        )
+        other = AgentProfile(
+            id="agent_catalog_other",
+            tenant_id="tenant_demo",
+            name="员工 B",
+            is_overall=False,
+        )
+        server = MCPServer(
+            id="server_catalog",
+            tenant_id="tenant_demo",
+            name="finance",
+            display_name="金融数据 MCP",
+            description="股票和公告查询",
+            transport="streamable_http",
+            url="https://secret.example.test/mcp",
+            headers_json={"Authorization": "Bearer secret-token"},
+            env_json={"API_KEY": "secret-value"},
+            enabled=True,
+        )
+        db.add(owner)
+        db.add(other)
+        db.add(server)
+        db.flush()
+
+        mcp_tools: list[Tool] = []
+        for index in range(29):
+            tool = Tool(
+                tenant_id="tenant_demo",
+                name=f"finance.tool_{index:02d}",
+                display_name=f"工具 {index:02d}",
+                description=f"金融工具 {index:02d}",
+                tool_type="mcp",
+                method="POST",
+                url=f"mcp://finance/tool_{index:02d}",
+                mcp_server_id=server.id,
+                input_schema={"type": "object"},
+                enabled=True,
+            )
+            db.add(tool)
+            db.flush()
+            ensure_private_resource_binding(
+                db,
+                "tenant_demo",
+                owner.id,
+                "tool",
+                tool.id,
+                "active",
+            )
+            mcp_tools.append(tool)
+        http_tool = Tool(
+            tenant_id="tenant_demo",
+            name="internal.lookup",
+            display_name="内部查询",
+            description="查询内部数据",
+            tool_type="http",
+            method="POST",
+            url="https://secret.example.test/http",
+            headers_json={"X-Token": "secret-http-token"},
+            enabled=True,
+        )
+        db.add(http_tool)
+        db.flush()
+        ensure_private_resource_binding(
+            db,
+            "tenant_demo",
+            owner.id,
+            "tool",
+            http_tool.id,
+            "active",
+        )
+        db.commit()
+
+        owner_catalog = _skill_action_catalog(db, "tenant_demo", owner.id)
+        other_catalog = _skill_action_catalog(db, "tenant_demo", other.id)
+
+        assert len(owner_catalog.mcp_toolsets) == 1
+        assert owner_catalog.mcp_toolsets[0].value == "call_mcp:server_catalog"
+        assert owner_catalog.mcp_toolsets[0].tool_count == 29
+        assert [item.value for item in owner_catalog.http_tools] == [
+            "call_tool:internal.lookup"
+        ]
+        assert other_catalog.mcp_toolsets == []
+        assert other_catalog.http_tools == []
+        serialized = json.dumps(owner_catalog.model_dump(mode="json"), ensure_ascii=False)
+        assert "secret.example.test" not in serialized
+        assert "secret-token" not in serialized
+        assert "secret-value" not in serialized
+
+        requested = [
+            {"action": "call_mcp:server_catalog"},
+            {"name": "private.not_visible"},
+        ]
+        trusted = _trusted_available_tools(db, "tenant_demo", owner.id, requested)
+        assert len(trusted) == 29
+        assert {item["action"] for item in trusted} == {"call_mcp:server_catalog"}
+        assert all("url" not in item and "headers" not in item for item in trusted)
+        assert _trusted_available_tools(db, "tenant_demo", other.id, requested) == []
+
+        first_binding = db.exec(
+            select(AgentResourceBinding).where(
+                AgentResourceBinding.tenant_id == "tenant_demo",
+                AgentResourceBinding.agent_id == owner.id,
+                AgentResourceBinding.resource_type == "tool",
+                AgentResourceBinding.resource_id == mcp_tools[0].id,
+            )
+        ).first()
+        assert first_binding is not None
+        first_binding.status = "deleted"
+        db.add(first_binding)
+        db.commit()
+        assert _skill_action_catalog(
+            db, "tenant_demo", owner.id
+        ).mcp_toolsets[0].tool_count == 28
+
+        mcp_tools[1].enabled = False
+        db.add(mcp_tools[1])
+        db.commit()
+        assert _skill_action_catalog(
+            db, "tenant_demo", owner.id
+        ).mcp_toolsets[0].tool_count == 27
+
+        server.enabled = False
+        db.add(server)
+        db.commit()
+        assert _skill_action_catalog(db, "tenant_demo", owner.id).mcp_toolsets == []
+
+
+def test_personal_created_skill_binds_all_children_of_selected_mcp() -> None:
+    with _test_session() as db:
+        db.add(Tenant(id="tenant_demo", name="Demo"))
+        agent = AgentProfile(
+            id="agent_mcp_owner",
+            tenant_id="tenant_demo",
+            name="个人员工",
+            is_overall=False,
+            metadata_json={"owner_user_id": "user_owner", "owner_username": "owner"},
+        )
+        server = MCPServer(
+            id="server_selected",
+            tenant_id="tenant_demo",
+            name="selected",
+            transport="builtin",
+        )
+        db.add(agent)
+        db.add(server)
+        children = [
+            Tool(
+                tenant_id="tenant_demo",
+                name=f"selected.tool_{index}",
+                tool_type="mcp",
+                method="POST",
+                url=f"mcp://selected/tool_{index}",
+                mcp_server_id=server.id,
+                enabled=True,
+            )
+            for index in range(3)
+        ]
+        db.add_all(children)
+        db.commit()
+
+        content = _skill_card().model_copy(deep=True)
+        content.skill_id = "mcp_group_skill"
+        content.nodes[0].allowed_actions = [f"call_mcp:{server.id}"]
+        create_skill(
+            SkillCreateRequest(
+                tenant_id="tenant_demo",
+                content=content,
+                status="published",
+            ),
+            agent_id=agent.id,
+            db=db,
+            current_user=_owner_user(),
+        )
+
+        for child in children:
+            db.refresh(child)
+            assert "mcp_group_skill" in child.allowed_skills_json
 
 
 def test_personal_created_skill_uses_current_admin_when_owner_missing() -> None:

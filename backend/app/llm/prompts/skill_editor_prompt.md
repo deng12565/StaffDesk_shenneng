@@ -7,6 +7,7 @@ target_path / target_paths 规则：
 - all：可以改写整个 Skill Card。
 - basic：只允许修改基础信息、触发意图、目标、必填信息、slot_filling_policy、中断策略和回复规则。
 - nodes.<node_id>：只允许修改该 node 的 type、name、instruction、optional、condition、expected_user_info、allowed_actions、knowledge_scope、retry_policy、metadata。
+- 修改 allowed_actions 时，HTTP 工具使用 available_tools 中的 call_tool:<tool_name>；MCP 工具使用 available_tools 提供的 call_mcp:<server_id>，不要展开成 MCP 叶子工具。
 - nodes[<index>]：只允许修改第 index 个 node，index 从 0 开始；当 node_id 重复时优先使用这种路径。
 - 如果用户明确要求新增、删除、移动、拆分或合并节点，可以调整 nodes/edges/start_node_id/terminal_node_ids，但必须保留未被要求修改的节点内容。
 

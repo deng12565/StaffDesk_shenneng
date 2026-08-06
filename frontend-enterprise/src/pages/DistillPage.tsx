@@ -43,8 +43,8 @@ import {
   DialogTitle,
   Input,
   Popover,
+  PopoverAnchor,
   PopoverContent,
-  PopoverTrigger,
   Select as UISelect,
   SelectContent,
   SelectItem,
@@ -250,7 +250,15 @@ import {
   type ToolStatusBadgeVariant,
 } from './distillPageStyles';
 import { api, ApiError, streamGet, streamPost, TENANT_ID } from '../api/client';
-import type { ModelConfigRead, SkillCard, SkillRead, ToolProbeResponse, ToolRead, ToolSuggestion } from '../types';
+import type {
+  ModelConfigRead,
+  SkillActionCatalogRead,
+  SkillCard,
+  SkillRead,
+  ToolProbeResponse,
+  ToolRead,
+  ToolSuggestion,
+} from '../types';
 
 type ChatItem = {
   id: string;
@@ -304,9 +312,12 @@ type ToolStatusMap = Record<string, ToolActionStatus>;
 
 type ViewMode = 'source' | 'flow';
 
-type SelectOption = {
+export type SelectOption = {
   value: string;
   label: string;
+  group?: string;
+  description?: string;
+  legacy?: boolean;
 };
 
 const NODE_TYPE_OPTIONS: SelectOption[] = [
@@ -320,17 +331,18 @@ const NODE_TYPE_OPTIONS: SelectOption[] = [
 ];
 
 const BASE_ACTION_OPTIONS: SelectOption[] = [
-  { value: 'ask_user', label: '询问用户' },
-  { value: 'continue_flow', label: '继续流程' },
-  { value: 'answer_user', label: '回复用户' },
-  { value: 'handoff_human', label: '转人工' },
-  { value: 'ask_clarification', label: '澄清问题' },
-  { value: 'clarify_user', label: '澄清用户需求' },
-  { value: 'update_memory', label: '更新记忆' },
-  { value: 'reflect', label: '反思检查' },
-  { value: 'finish', label: '结束流程' },
-  { value: 'stop', label: '停止流程' },
+  { value: 'ask_user', label: '询问用户', group: '流程控制' },
+  { value: 'continue_flow', label: '继续流程', group: '流程控制' },
+  { value: 'answer_user', label: '回复用户', group: '流程控制' },
+  { value: 'handoff_human', label: '转人工', group: '流程控制' },
+  { value: 'ask_clarification', label: '澄清问题', group: '流程控制' },
 ];
+
+const EMPTY_ACTION_CATALOG: SkillActionCatalogRead = {
+  controls: [],
+  mcp_toolsets: [],
+  http_tools: [],
+};
 
 const CONDITION_PRESET_OPTIONS: SelectOption[] = [
   { value: '__always__', label: '总是可进入' },
@@ -527,6 +539,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
   const [toolDetailMessageId, setToolDetailMessageId] = useState<string | null>(null);
   const [probeArgsText, setProbeArgsText] = useState('');
   const [tools, setTools] = useState<ToolRead[]>([]);
+  const [actionCatalog, setActionCatalog] = useState<SkillActionCatalogRead>(EMPTY_ACTION_CATALOG);
   const [modelConfigs, setModelConfigs] = useState<ModelConfigRead[]>([]);
   const [selectedRewriteModelId, setSelectedRewriteModelId] = useState(
     () => window.localStorage.getItem(`${DISTILL_REWRITE_MODEL_STORAGE_KEY}:${TENANT_ID}`) || '',
@@ -732,10 +745,18 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
   }, [active]);
 
   useEffect(() => {
-    api
-      .get<ToolRead[]>(`/api/enterprise/tools?tenant_id=${TENANT_ID}${agentQuery}`)
-      .then(setTools)
-      .catch(() => setTools([]));
+    Promise.all([
+      api.get<ToolRead[]>(`/api/enterprise/tools?tenant_id=${TENANT_ID}${agentQuery}`),
+      api.get<SkillActionCatalogRead>(`/api/enterprise/skills/action-catalog?tenant_id=${TENANT_ID}${agentQuery}`),
+    ])
+      .then(([nextTools, nextCatalog]) => {
+        setTools(nextTools);
+        setActionCatalog(nextCatalog);
+      })
+      .catch(() => {
+        setTools([]);
+        setActionCatalog(EMPTY_ACTION_CATALOG);
+      });
   }, [agentQuery]);
 
   useEffect(() => {
@@ -770,7 +791,10 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
   const uploadingFile = attachments.some((item) => item.status === 'uploading');
   const readyAttachments = attachments.filter((item) => item.status === 'ready' && item.text?.trim());
   const allSelected = draft ? selectedPaths.length > 0 && allPaths.every((path) => selectedPaths.includes(path)) : false;
-  const toolDescriptions = useMemo(() => buildToolDescriptionMap(tools, messages), [messages, tools]);
+  const toolDescriptions = useMemo(
+    () => buildToolDescriptionMap(tools, messages, actionCatalog),
+    [actionCatalog, messages, tools],
+  );
   const toolStatuses = useMemo(() => buildToolStatusMap(tools, messages), [messages, tools]);
   const lockedSkillId = loadedSkill?.skill_id || skillId || '';
   const saveReviewDraft = useMemo(() => {
@@ -856,7 +880,12 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
     try {
       await streamPost(
         '/api/enterprise/skills/distill/stream',
-        { tenant_id: TENANT_ID, ...payload, model_config_id: selectedRewriteModelId || undefined },
+        {
+          tenant_id: TENANT_ID,
+          agent_id: activeAgentId || undefined,
+          ...payload,
+          model_config_id: selectedRewriteModelId || undefined,
+        },
         (item) => {
           trackActiveJobEvent(item, baseJob);
           if (item.event === 'status') {
@@ -975,6 +1004,7 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
         `/api/enterprise/skills/${encodeURIComponent(editableDraft.skill_id)}/rewrite/stream`,
         {
           tenant_id: TENANT_ID,
+          agent_id: activeAgentId || undefined,
           current_skill: editableDraft,
           instruction: text,
           model_config_id: selectedRewriteModelId || undefined,
@@ -2397,6 +2427,8 @@ export default function DistillPage({ active = true, searchParamsOverride, curre
               updatingPaths={updatingPaths}
               dirtyPaths={dirtyPaths}
               textDiffs={textDiffs}
+              actionCatalog={actionCatalog}
+              tools={tools}
               toolDescriptions={toolDescriptions}
               toolStatuses={toolStatuses}
               containerRef={sourceScrollRef}
@@ -2774,7 +2806,7 @@ function SourceNumberInput({
  * a filterable input backed by a popover list. Committing an empty value removes
  * the action, matching the previous `allowClear` behaviour.
  */
-function ActionCombobox({
+export function ActionCombobox({
   value,
   options,
   placeholder = '选择一个动作',
@@ -2795,6 +2827,13 @@ function ActionCombobox({
           String(option.value).toLowerCase().includes(normalizedQuery),
       )
     : options;
+  const groupedOptions = filtered.reduce<Array<{ group: string; options: SelectOption[] }>>((groups, option) => {
+    const group = option.group || '其他动作';
+    const current = groups.find((item) => item.group === group);
+    if (current) current.options.push(option);
+    else groups.push({ group, options: [option] });
+    return groups;
+  }, []);
   return (
     <Popover
       open={open}
@@ -2803,8 +2842,9 @@ function ActionCombobox({
         if (!next) onSelect(value || '');
       }}
     >
-      <PopoverTrigger asChild>
+      <PopoverAnchor asChild>
         <input
+          type="text"
           autoComplete="off"
           data-1p-ignore="true"
           data-lpignore="true"
@@ -2813,6 +2853,7 @@ function ActionCombobox({
           autoFocus
           value={query}
           placeholder={placeholder}
+          onFocus={() => setOpen(true)}
           onChange={(event) => {
             setQuery(event.target.value);
             setOpen(true);
@@ -2827,7 +2868,7 @@ function ActionCombobox({
             }
           }}
         />
-      </PopoverTrigger>
+      </PopoverAnchor>
       <PopoverContent
         align="start"
         onOpenAutoFocus={(event) => event.preventDefault()}
@@ -2836,18 +2877,30 @@ function ActionCombobox({
         {filtered.length === 0 ? (
           <div className="px-[10px] py-[12px] text-center text-[13px] text-[#858b9c]">无匹配动作</div>
         ) : (
-          filtered.map((option) => (
-            <button
-              key={String(option.value)}
-              type="button"
-              className={cn(
-                'flex w-full items-center rounded-[8px] px-[10px] py-[6px] text-left text-[13px] text-foreground hover:bg-muted',
-                option.value === value && 'bg-muted',
-              )}
-              onClick={() => onSelect(String(option.value))}
-            >
-              {option.label}
-            </button>
+          groupedOptions.map((group) => (
+            <div key={group.group} className="py-[2px]">
+              <div className="px-[10px] pb-[3px] pt-[7px] text-[11px] font-medium text-[#858b9c]">
+                {group.group}
+              </div>
+              {group.options.map((option) => (
+                <button
+                  key={String(option.value)}
+                  type="button"
+                  className={cn(
+                    'flex w-full flex-col items-start rounded-[6px] px-[10px] py-[7px] text-left text-[13px] text-foreground hover:bg-muted',
+                    option.value === value && 'bg-muted',
+                  )}
+                  onClick={() => onSelect(String(option.value))}
+                >
+                  <span className="w-full break-words">{option.label}</span>
+                  {option.description && (
+                    <span className="mt-[2px] line-clamp-2 w-full break-words text-[11px] leading-[16px] text-[#858b9c]">
+                      {option.description}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
           ))
         )}
       </PopoverContent>
@@ -2892,6 +2945,8 @@ function SkillSource({
   updatingPaths,
   dirtyPaths,
   textDiffs,
+  actionCatalog,
+  tools,
   toolDescriptions,
   toolStatuses,
   containerRef,
@@ -2905,6 +2960,8 @@ function SkillSource({
   updatingPaths: string[];
   dirtyPaths: string[];
   textDiffs: TextDiffAnimation[];
+  actionCatalog: SkillActionCatalogRead;
+  tools: ToolRead[];
   toolDescriptions: ToolDescriptionMap;
   toolStatuses: ToolStatusMap;
   containerRef: RefObject<HTMLDivElement>;
@@ -3202,7 +3259,13 @@ function SkillSource({
       label: `Node ${index + 1} · ${String(step.name || nodeId)}`,
     };
   });
-  const actionOptions = buildActionOptions(toolDescriptions, toolStatuses, steps);
+  const actionOptions = buildActionOptions(
+    actionCatalog,
+    tools,
+    toolDescriptions,
+    toolStatuses,
+    steps,
+  );
 
   return (
     <div className={SOURCE_MD_CLASS} ref={containerRef}>
@@ -4768,7 +4831,7 @@ function EditableActionList({
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const mergedOptions = mergeSelectOptions(options, actions.map((action) => ({
     value: action,
-    label: actionLabel(action),
+    label: actionLabel(action, toolDescriptions),
   })));
 
   function writeActions(nextActions: string[]) {
@@ -4834,7 +4897,7 @@ function EditableActionList({
               >
                 <ActionChip action={action} toolDescriptions={toolDescriptions} toolStatuses={toolStatuses} />
               </button>
-              <button type="button" className={SOURCE_ACTION_REMOVE_CLASS} onClick={() => removeAction(index)} aria-label={`移除 ${actionLabel(action)}`}>
+              <button type="button" className={SOURCE_ACTION_REMOVE_CLASS} onClick={() => removeAction(index)} aria-label={`移除 ${actionLabel(action, toolDescriptions)}`}>
                 ×
               </button>
             </span>
@@ -5087,8 +5150,23 @@ function ActionChip({
   className?: string;
 }) {
   const toolName = toolNameFromAction(action);
-  const description = toolName ? toolDescriptions[toolName] || '当前工具配置中暂无描述' : '';
-  const status = toolName ? toolStatuses[toolName] || 'incomplete' : '';
+  const mcpServerId = mcpServerIdFromAction(action);
+  const isKnownToolAction = toolName
+    ? Object.prototype.hasOwnProperty.call(toolDescriptions, toolName)
+      || Object.prototype.hasOwnProperty.call(toolStatuses, toolName)
+    : mcpServerId
+      ? Object.prototype.hasOwnProperty.call(toolDescriptions, action)
+      : false;
+  const isLegacyAction = !BASE_ACTION_OPTIONS.some((option) => option.value === action)
+    && !isKnownToolAction;
+  const description = toolName
+    ? toolDescriptions[toolName] || '当前工具配置中暂无描述'
+    : mcpServerId
+      ? toolDescriptions[action] || '当前 MCP 工具集暂无描述'
+      : isLegacyAction
+        ? '旧版动作：当前运行时不再提供该动作作为新增选项。'
+        : '';
+  const status = toolName ? toolStatuses[toolName] || 'incomplete' : mcpServerId ? 'existing' : '';
   const variant = className.includes('removed')
     ? 'removed'
     : className.includes('added')
@@ -5101,10 +5179,10 @@ function ActionChip({
 
   return (
     <span
-      className={actionChipClass({ toolName: toolName || undefined, status, variant })}
+      className={actionChipClass({ toolName: toolName || mcpServerId || undefined, status, variant })}
       title={description || undefined}
     >
-      {actionLabel(action)}
+      {isLegacyAction ? `${actionLabel(action)}（旧版动作）` : actionLabel(action, toolDescriptions)}
     </span>
   );
 }
@@ -6154,7 +6232,11 @@ function bumpSkillVersion(version: string): string {
   return `${major}.${minor + 1}.0`;
 }
 
-function buildToolDescriptionMap(tools: ToolRead[], messages: ChatItem[] = []): ToolDescriptionMap {
+function buildToolDescriptionMap(
+  tools: ToolRead[],
+  messages: ChatItem[] = [],
+  actionCatalog: SkillActionCatalogRead = EMPTY_ACTION_CATALOG,
+): ToolDescriptionMap {
   const descriptions = tools.reduce<ToolDescriptionMap>((acc, tool) => {
     acc[tool.name] = [tool.display_name, tool.description].filter(Boolean).join('：') || tool.name;
     return acc;
@@ -6165,6 +6247,9 @@ function buildToolDescriptionMap(tools: ToolRead[], messages: ChatItem[] = []): 
     if (suggestion.matched_tool_name) {
       descriptions[suggestion.matched_tool_name] = descriptions[suggestion.name];
     }
+  });
+  actionCatalog.mcp_toolsets.forEach((option) => {
+    descriptions[option.value] = [option.label, option.description].filter(Boolean).join('：');
   });
   return descriptions;
 }
@@ -6272,30 +6357,100 @@ function toolNameFromAction(action: string): string {
   return action.startsWith('call_tool:') ? action.replace(/^call_tool:/, '').trim() : '';
 }
 
-function actionLabel(action: string): string {
+function mcpServerIdFromAction(action: string): string {
+  return action.startsWith('call_mcp:') ? action.replace(/^call_mcp:/, '').trim() : '';
+}
+
+function actionLabel(action: string, descriptions: ToolDescriptionMap = {}): string {
   const toolName = toolNameFromAction(action);
   if (toolName) return `调用工具：${toolName}`;
+  const mcpServerId = mcpServerIdFromAction(action);
+  if (mcpServerId) {
+    const configuredLabel = String(descriptions[action] || '').split('：')[0].trim();
+    return configuredLabel || `使用 MCP：${mcpServerId}`;
+  }
   return BASE_ACTION_OPTIONS.find((item) => item.value === action)?.label || action;
 }
 
-function buildActionOptions(
+export function buildActionOptions(
+  catalog: SkillActionCatalogRead,
+  tools: ToolRead[],
   toolDescriptions: ToolDescriptionMap,
   toolStatuses: ToolStatusMap,
   steps: Array<Record<string, unknown>>,
 ): SelectOption[] {
+  const controlOptions = catalog.controls.length > 0
+    ? catalog.controls.map((option) => ({
+        value: option.value,
+        label: option.label,
+        description: option.description,
+        group: '流程控制',
+      }))
+    : BASE_ACTION_OPTIONS;
+  const mcpOptions = catalog.mcp_toolsets.map((option) => ({
+    value: option.value,
+    label: option.label,
+    description: [option.description, `${option.tool_count} 个可用工具`].filter(Boolean).join(' · '),
+    group: 'MCP 工具集',
+  }));
+  const catalogHttpOptions = catalog.http_tools.map((option) => ({
+    value: option.value,
+    label: option.label,
+    description: option.description,
+    group: '独立工具',
+  }));
+  const mcpLeafNames = new Set(
+    tools
+      .filter((tool) => tool.tool_type === 'mcp' && Boolean(tool.mcp_server_id))
+      .map((tool) => tool.name),
+  );
+  const catalogValues = new Set([
+    ...controlOptions,
+    ...mcpOptions,
+    ...catalogHttpOptions,
+  ].map((option) => option.value));
   const toolNames = Array.from(new Set([
     ...Object.keys(toolDescriptions),
     ...Object.keys(toolStatuses),
-  ])).filter(Boolean).sort((a, b) => a.localeCompare(b));
-  const toolOptions = toolNames.map((toolName) => ({
-    value: `call_tool:${toolName}`,
-    label: `调用工具：${toolName}`,
-  }));
+  ]))
+    .filter((name) => Boolean(name) && !name.startsWith('call_mcp:') && !mcpLeafNames.has(name))
+    .sort((a, b) => a.localeCompare(b));
+  const extraToolOptions = toolNames
+    .map((toolName) => ({
+      value: `call_tool:${toolName}`,
+      label: `调用工具：${toolName}`,
+      description: toolDescriptions[toolName] || '',
+      group: '独立工具',
+    }))
+    .filter((option) => !catalogValues.has(option.value));
+  const knownActionValues = new Set([
+    ...catalogValues,
+    ...extraToolOptions.map((option) => option.value),
+    ...tools.map((tool) => `call_tool:${tool.name}`),
+  ]);
   const currentActionOptions = steps
     .flatMap((step) => asStringList(step.allowed_actions))
     .filter(Boolean)
-    .map((action) => ({ value: action, label: actionLabel(action) }));
-  return mergeSelectOptions(BASE_ACTION_OPTIONS, toolOptions, currentActionOptions);
+    .filter((action) => !catalogValues.has(action))
+    .map((action) => {
+      const isLegacy = !knownActionValues.has(action);
+      return {
+        value: action,
+        label: !isLegacy
+          ? actionLabel(action, toolDescriptions)
+          : `${actionLabel(action, toolDescriptions)}（旧版动作）`,
+        description: isLegacy ? '该动作不在当前运行时动作目录中，仅为兼容历史 SOP 保留。' : '',
+        group: isLegacy ? '旧版动作' : '现有动作',
+        legacy: isLegacy,
+      };
+    });
+  return mergeSelectOptions(
+    controlOptions,
+    mcpOptions,
+    catalogHttpOptions,
+    extraToolOptions,
+    currentActionOptions,
+  );
 }
 
 function mergeSelectOptions(...groups: SelectOption[][]): SelectOption[] {

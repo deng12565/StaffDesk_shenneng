@@ -17,9 +17,14 @@ from app.db.models import ModelConfig
 from app.llm import LLMClient, LLMError
 from app.skills.llm_limits import skill_model_config
 from app.skills.skill_reflection import reflect_skill_response, reflect_skill_response_stream
-from app.skills.skill_schema import SkillDistillRequest, SkillDistillResponse, SkillCard, SkillGraphNode, ToolSuggestion
+from app.skills.skill_schema import (
+    SkillCard,
+    SkillDistillRequest,
+    SkillDistillResponse,
+    SkillGraphNode,
+    ToolSuggestion,
+)
 from app.skills.step_ids import ensure_unique_node_ids, skill_card_with_unique_step_ids
-
 
 PROMPT_PATH = paths.resource_dir() / "app" / "llm" / "prompts" / "skill_distiller_prompt.md"
 STREAM_INTERVAL_SECONDS = 0.035
@@ -362,7 +367,7 @@ class SkillDistiller:
         for node in normalized_nodes:
             _ensure_adaptive_step_instruction(node)
             actions = [str(action) for action in node.get("allowed_actions", [])]
-            if not any(action.startswith("call_tool:") for action in actions):
+            if not any(_is_tool_action(action) for action in actions):
                 continue
             if "continue_flow" not in actions:
                 actions.append("continue_flow")
@@ -523,7 +528,7 @@ class SkillDistiller:
 def _steps_have_tool_action(steps: list[dict[str, Any]]) -> bool:
     for step in steps:
         actions = step.get("allowed_actions", [])
-        if isinstance(actions, list) and any(str(action).startswith("call_tool:") for action in actions):
+        if isinstance(actions, list) and any(_is_tool_action(action) for action in actions):
             return True
     return False
 
@@ -556,7 +561,7 @@ def _steps_declare_confirmation(steps: list[dict[str, Any]]) -> bool:
 def _attach_declared_confirmation_to_tool_steps(steps: list[dict[str, Any]]) -> None:
     confirmed_fields: list[str] = []
     for step in steps:
-        if any(str(action).startswith("call_tool:") for action in step.get("allowed_actions", [])):
+        if any(_is_tool_action(action) for action in step.get("allowed_actions", [])):
             _append_tool_confirmation_instruction(step, confirmed_fields)
         for field in _confirmation_fields([step]):
             if field not in confirmed_fields:
@@ -709,6 +714,16 @@ def _compact_available_tools(
             "description": description,
             "input_schema": _compact_tool_input_schema(tool.get("input_schema")),
         }
+        for key in (
+            "kind",
+            "action",
+            "mcp_server_id",
+            "mcp_server_name",
+            "mcp_server_display_name",
+        ):
+            value = tool.get(key)
+            if value not in (None, ""):
+                projected[key] = value
         if tool.get("requires_confirmation") is True:
             projected["requires_confirmation"] = True
         projected = {key: value for key, value in projected.items() if value not in (None, "", [], {})}
@@ -932,12 +947,29 @@ def _available_tool_names(available_tools: list[dict[str, Any]]) -> set[str]:
     return names
 
 
+def _available_mcp_actions(available_tools: list[dict[str, Any]]) -> set[str]:
+    actions: set[str] = set()
+    for tool in available_tools:
+        if not isinstance(tool, dict):
+            continue
+        action = str(tool.get("action") or "").strip()
+        if action.startswith("call_mcp:") and action.split(":", 1)[1].strip():
+            actions.add(action)
+    return actions
+
+
+def _is_tool_action(action: object) -> bool:
+    value = str(action or "").strip()
+    return value.startswith("call_tool:") or value.startswith("call_mcp:")
+
+
 def _remove_unknown_tool_actions(
     steps: list[dict[str, Any]],
     available_tools: list[dict[str, Any]],
     retain_tool_names: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     available_names = _available_tool_names(available_tools)
+    available_mcp_actions = _available_mcp_actions(available_tools)
     retained_names = retain_tool_names or set()
     missing_names: list[str] = []
     if not available_names:
@@ -948,6 +980,13 @@ def _remove_unknown_tool_actions(
         actions = []
         for action in next_step.get("allowed_actions", []):
             action_text = str(action)
+            if action_text.startswith("call_mcp:"):
+                if action_text in available_mcp_actions:
+                    actions.append(action_text)
+                    continue
+                if action_text not in missing_names:
+                    missing_names.append(action_text)
+                continue
             if not action_text.startswith("call_tool:"):
                 actions.append(action_text)
                 continue

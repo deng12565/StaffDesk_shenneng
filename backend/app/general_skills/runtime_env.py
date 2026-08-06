@@ -13,7 +13,6 @@ from pathlib import Path
 
 from app.config import get_settings
 
-
 IMPORT_NAMES = {
     "beautifulsoup4": "bs4",
     "python-docx": "docx",
@@ -42,7 +41,9 @@ def runtime_environment(base_env: dict[str, str] | None = None) -> dict[str, str
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
     env["VIRTUAL_ENV"] = str(bin_dir.parent)
     env["GENERAL_SKILL_RUNTIME_PYTHON"] = str(python_path)
-    env.setdefault("PYTHONUNBUFFERED", "1")
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     return env
 
 

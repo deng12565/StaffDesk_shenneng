@@ -1,4 +1,5 @@
 import base64
+import threading
 
 from fastapi import HTTPException
 from io import BytesIO
@@ -9,6 +10,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from zipfile import ZipFile
 
 from app.api.general_skills import (
+    _general_skill_failure_message,
     archive_general_skill,
     delete_general_skill,
     get_general_skill,
@@ -34,7 +36,9 @@ from app.db.models import (
     Tool,
     User,
 )
+from app.general_skills import runner as general_skill_runner_module
 from app.general_skills.runner import GeneralSkillRunner, GeneralSkillSelector
+from app.general_skills.runtime_env import runtime_environment
 from app.general_skills.schema import (
     GeneralSkillClawHubImportRequest,
     GeneralSkillImportRequest,
@@ -2111,6 +2115,272 @@ def test_general_skill_runner_repairs_failed_code(monkeypatch) -> None:
     assert calls == ["runner", "repair", "reply"]
     assert any(item["phase"] == "reflection_retrying" for item in response.execution_trace)
     assert any(item["phase"] == "stdout_chunk" and "first_fail" in item["text"] for item in events)
+
+
+def test_general_skill_runner_direct_mode_skips_code_and_extra_model_calls(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_init(self, model_config):  # noqa: ANN001
+        return None
+
+    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        prompt_text = _system_and_stage_instructions(system_prompt, payload)
+        if "通用技能执行器" not in prompt_text:
+            raise AssertionError("direct mode must not call review, repair, or reply models")
+        calls.append("plan")
+        return {
+            "execution_mode": "direct",
+            "structured_result": {
+                "success": True,
+                "summary": "人工智能正在改变办公、客服和内容生产。",
+                "key_points": ["提升效率", "需要治理"],
+            },
+            "reply": "总结：人工智能正在改变办公、客服和内容生产，同时需要配套治理。",
+            "rationale": "只依赖输入文本和 SKILL.md 即可完成总结。",
+        }
+
+    monkeypatch.setattr(LLMClient, "__init__", fake_init)
+    monkeypatch.setattr(LLMClient, "generate_json", fake_generate_json)
+    monkeypatch.setattr(
+        GeneralSkillRunner,
+        "_execute_plan",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("direct mode must not start a subprocess")
+        ),
+    )
+
+    skill = GeneralSkill(
+        tenant_id="tenant_demo",
+        slug="text-summary",
+        name="文本总结助手",
+        description="总结用户输入的中文文本",
+        skill_markdown="# 文本总结助手\n输出摘要和要点。",
+        status="published",
+    )
+    model_config = ModelConfig(
+        tenant_id="tenant_demo",
+        name="Fake model",
+        api_key_encrypted=encrypt_secret("test-key"),
+        model="fake",
+        is_default=True,
+        enabled=True,
+    )
+
+    response = GeneralSkillRunner().run(skill, "请总结这段长中文", model_config)
+
+    assert calls == ["plan"]
+    assert response.generated_code == ""
+    assert response.stdout == ""
+    assert response.stderr == ""
+    assert response.structured_result["summary"].startswith("人工智能")
+    assert "总结" in response.reply
+    assert [item["phase"] for item in response.execution_trace].count("attempt_started") == 0
+    assert any(item["phase"] == "direct_execution_finished" for item in response.execution_trace)
+
+
+def test_general_skill_runner_syntax_preflight_caps_attempts_without_subprocess(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def fake_init(self, model_config):  # noqa: ANN001
+        return None
+
+    def fake_generate_json(self, system_prompt, payload):  # noqa: ANN001
+        prompt_text = _system_and_stage_instructions(system_prompt, payload)
+        if "代码修复器" in prompt_text:
+            calls.append("repair")
+            assert payload["previous_attempts"][-1]["structured_result"]["line"] == 1
+            return {
+                "execution_mode": "runner",
+                "runtime": "python",
+                "code": "def summarize(\n",
+                "rationale": "仍然是错误代码。",
+            }
+        if "通用技能执行器" in prompt_text:
+            calls.append("plan")
+            return {
+                "execution_mode": "runner",
+                "runtime": "python",
+                "code": "def summarize(\n",
+                "rationale": "生成 runner。",
+            }
+        if "通用技能结果回复器" in prompt_text:
+            calls.append("reply")
+            return {"reply": "代码语法错误，未能完成运行。"}
+        raise AssertionError("syntax failures must skip the result-review model")
+
+    def fail_popen(*_args, **_kwargs):
+        raise AssertionError("syntax-invalid code must not start a subprocess")
+
+    monkeypatch.setattr(LLMClient, "__init__", fake_init)
+    monkeypatch.setattr(LLMClient, "generate_json", fake_generate_json)
+    monkeypatch.setattr(general_skill_runner_module.subprocess, "Popen", fail_popen)
+
+    skill = GeneralSkill(
+        tenant_id="tenant_demo",
+        slug="broken-summary",
+        name="错误代码技能",
+        skill_markdown="# 错误代码技能",
+        status="published",
+    )
+    model_config = ModelConfig(
+        tenant_id="tenant_demo",
+        name="Fake model",
+        api_key_encrypted=encrypt_secret("test-key"),
+        model="fake",
+        is_default=True,
+        enabled=True,
+    )
+
+    response = GeneralSkillRunner().run(skill, "测试语法错误", model_config, max_attempts=99)
+
+    assert calls == ["plan", "repair", "repair", "reply"]
+    assert response.structured_result["error"] == "runner_syntax_error"
+    assert response.structured_result["exception_type"] == "SyntaxError"
+    assert "第 1 行" in response.structured_result["message"]
+    assert [item["phase"] for item in response.execution_trace].count("attempt_started") == 3
+    assert [item["phase"] for item in response.execution_trace].count("code_validation_failed") == 3
+
+
+def test_general_skill_output_decoder_preserves_split_utf8_characters() -> None:
+    text = '{"success": true, "result": "长中文总结"}\n'
+    encoded = text.encode("utf-8")
+    split_at = encoded.index("长".encode("utf-8")) + 1
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+    trace: list[dict] = []
+    decoders = general_skill_runner_module._utf8_stream_decoders()  # noqa: SLF001
+
+    general_skill_runner_module._append_decoded_output(  # noqa: SLF001
+        "stdout",
+        encoded[:split_at],
+        decoders,
+        stdout_parts,
+        stderr_parts,
+        trace,
+        None,
+        1,
+    )
+    general_skill_runner_module._append_decoded_output(  # noqa: SLF001
+        "stdout",
+        encoded[split_at:],
+        decoders,
+        stdout_parts,
+        stderr_parts,
+        trace,
+        None,
+        1,
+    )
+    general_skill_runner_module._append_decoded_output(  # noqa: SLF001
+        "stdout",
+        b"",
+        decoders,
+        stdout_parts,
+        stderr_parts,
+        trace,
+        None,
+        1,
+        final=True,
+    )
+
+    assert "".join(stdout_parts) == text
+    assert "�" not in "".join(stdout_parts)
+
+
+def test_general_skill_runtime_forces_utf8_and_uses_configured_timeout(
+    monkeypatch, tmp_path
+) -> None:
+    runtime_python = tmp_path / "python.exe"
+    monkeypatch.setattr(
+        "app.general_skills.runtime_env.ensure_runtime_python", lambda: runtime_python
+    )
+
+    env = runtime_environment({"PATH": "gbk-default"})
+    skill = GeneralSkill(
+        tenant_id="tenant_demo",
+        slug="runtime-timeout",
+        name="运行时限",
+        skill_markdown="# 运行时限",
+        runtime_config_json={"timeout_seconds": 27},
+    )
+
+    assert env["PYTHONUTF8"] == "1"
+    assert env["PYTHONIOENCODING"] == "utf-8"
+    assert env["PYTHONUNBUFFERED"] == "1"
+    assert general_skill_runner_module._runtime_timeout_seconds(skill) == 27  # noqa: SLF001
+    skill.runtime_config_json = {"timeout_seconds": 999}
+    assert general_skill_runner_module._runtime_timeout_seconds(skill) == 12  # noqa: SLF001
+
+
+def test_general_skill_model_timeout_and_request_attempt_limit_are_capped() -> None:
+    model_config = ModelConfig(
+        tenant_id="tenant_demo",
+        name="Fake model",
+        api_key_encrypted=encrypt_secret("test-key"),
+        model="fake",
+        enabled=True,
+    )
+
+    bounded = general_skill_runner_module._bounded_model_config(model_config)  # noqa: SLF001
+    request = GeneralSkillRunRequest(tenant_id="tenant_demo", query="总结文本")
+
+    assert bounded.timeout_seconds == 90
+    assert request.max_attempts == 3
+    try:
+        GeneralSkillRunRequest(tenant_id="tenant_demo", query="总结文本", max_attempts=4)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("max_attempts greater than 3 must be rejected")
+    assert _general_skill_failure_message(
+        {
+            "structured_result": {
+                "success": False,
+                "error": "runner_syntax_error",
+                "message": "SyntaxError: '(' was never closed（第 49 行）",
+            }
+        }
+    ) == "SyntaxError: '(' was never closed（第 49 行）"
+
+
+def test_general_skill_runner_cancelled_before_planning_does_not_retry(monkeypatch) -> None:
+    monkeypatch.setattr(
+        LLMClient,
+        "__init__",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cancelled runs must not call the model")
+        ),
+    )
+    cancel_event = threading.Event()
+    cancel_event.set()
+    skill = GeneralSkill(
+        tenant_id="tenant_demo",
+        slug="cancelled",
+        name="取消测试",
+        skill_markdown="# 取消测试",
+        status="published",
+    )
+    model_config = ModelConfig(
+        tenant_id="tenant_demo",
+        name="Fake model",
+        api_key_encrypted=encrypt_secret("test-key"),
+        model="fake",
+        is_default=True,
+        enabled=True,
+    )
+
+    response = GeneralSkillRunner().run(
+        skill,
+        "取消运行",
+        model_config,
+        max_attempts=3,
+        cancel_event=cancel_event,
+    )
+
+    assert response.structured_result["error"] == "general_skill_cancelled"
+    assert [item["phase"] for item in response.execution_trace] == [
+        "skill_loaded",
+        "run_cancelled",
+    ]
 
 
 def test_general_skill_runner_materializes_folder_package(monkeypatch) -> None:
